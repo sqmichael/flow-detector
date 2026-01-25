@@ -66,6 +66,7 @@ export function useSensorServer(
   const hrvCalculatorRef = useRef<HRVCalculator>(new HRVCalculator());
   const serverUrlRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const messageCountRef = useRef<number>(0);
 
   // Clean up on unmount
   useEffect(() => {
@@ -81,61 +82,50 @@ export function useSensorServer(
 
   const handleMessage = useCallback((event: MessageEvent) => {
     try {
-      const data = JSON.parse(event.data) as SensorServerMessage;
-      log("Received message:", data);
+      // SensorServer sends: {"values": [...], "timestamp": number, "accuracy": number}
+      const data = JSON.parse(event.data);
+
+      // Log first few messages for debugging
+      messageCountRef.current++;
+      if (messageCountRef.current <= 3) {
+        log("Received message:", data);
+      }
 
       const timestamp = data.timestamp || Date.now();
 
-      // Handle heart rate data
-      if (data.sensor === "heart_rate" && data.values && data.values.length > 0) {
-        const bpm = data.values[0];
-        log(`Heart rate: ${bpm} BPM`);
+      // For heart rate sensor: values[0] is BPM
+      // For accelerometer (testing): values is [x, y, z]
+      if (data.values && data.values.length > 0) {
+        // When connected to heart_rate sensor, first value is BPM
+        // For now, we're testing with accelerometer, so just log
+        const firstValue = data.values[0];
 
-        setState((prev) => ({
-          ...prev,
-          heartRate: bpm,
-          lastUpdate: timestamp,
-        }));
-      }
-
-      // Handle IBI/PPG data for HRV calculation
-      // SensorServer may send this as "ppg" or with heart_rate containing IBI
-      if (
-        (data.sensor === "ppg" || data.sensor === "heart_rate") &&
-        data.values &&
-        data.values.length > 1
-      ) {
-        // Some SensorServer implementations send [HR, IBI] format
-        const ibi = data.values[1];
-        if (ibi > 0) {
-          log(`IBI: ${ibi}ms`);
-          hrvCalculatorRef.current.addIBI(ibi, timestamp);
-
-          // Calculate HRV after adding new IBI
-          const hrvMetrics = hrvCalculatorRef.current.calculate();
-          if (hrvMetrics) {
-            setState((prev) => ({
-              ...prev,
-              hrv: hrvMetrics,
-              lastUpdate: timestamp,
-            }));
-          }
-        }
-      }
-
-      // Also check for explicit IBI sensor
-      if (data.sensor === "ibi" && data.values && data.values.length > 0) {
-        const ibi = data.values[0];
-        log(`IBI (explicit): ${ibi}ms`);
-        hrvCalculatorRef.current.addIBI(ibi, timestamp);
-
-        const hrvMetrics = hrvCalculatorRef.current.calculate();
-        if (hrvMetrics) {
+        // If this looks like a heart rate (reasonable BPM range 30-220)
+        if (firstValue >= 30 && firstValue <= 220 && data.values.length === 1) {
+          log(`Heart rate: ${firstValue} BPM`);
           setState((prev) => ({
             ...prev,
-            hrv: hrvMetrics,
+            heartRate: Math.round(firstValue),
             lastUpdate: timestamp,
           }));
+        }
+
+        // If there's a second value that could be IBI (200-2000ms range)
+        if (data.values.length > 1) {
+          const possibleIBI = data.values[1];
+          if (possibleIBI >= 200 && possibleIBI <= 2000) {
+            log(`IBI: ${possibleIBI}ms`);
+            hrvCalculatorRef.current.addIBI(possibleIBI, timestamp);
+
+            const hrvMetrics = hrvCalculatorRef.current.calculate();
+            if (hrvMetrics) {
+              setState((prev) => ({
+                ...prev,
+                hrv: hrvMetrics,
+                lastUpdate: timestamp,
+              }));
+            }
+          }
         }
       }
     } catch (err) {
@@ -166,10 +156,21 @@ export function useSensorServer(
       }
 
       // Add default port if not specified
-      if (!url.includes(":", 5)) {
-        // Skip checking protocol's colon
+      // Check if there's a port after the host (look for colon after the protocol)
+      const hostPart = url.replace(/^wss?:\/\//, "");
+      if (!hostPart.includes(":")) {
         url = `${url}:8080`;
       }
+
+      // SensorServer requires a specific path with sensor type
+      // Format: ws://ip:port/sensor/connect?type=android.sensor.xxxxx
+      // For testing, we'll use accelerometer since most phones have it
+      // TODO: Change to heart_rate when watch app is set up
+      const baseUrl = url;
+      url = `${url}/sensor/connect?type=android.sensor.accelerometer`;
+
+      log(`Final WebSocket URL: ${url}`);
+      log(`Base URL for reference: ${baseUrl}`);
 
       serverUrlRef.current = url;
       log(`Connecting to ${url}...`);
@@ -181,10 +182,11 @@ export function useSensorServer(
       }));
 
       try {
+        log(`Creating WebSocket connection to: ${url}`);
         const ws = new WebSocket(url);
 
         ws.onopen = () => {
-          log("Connected to SensorServer");
+          log("Connected to SensorServer successfully!");
           setState((prev) => ({
             ...prev,
             isConnected: true,
@@ -195,15 +197,23 @@ export function useSensorServer(
         ws.onmessage = handleMessage;
 
         ws.onerror = (event) => {
-          log("WebSocket error:", event);
-          setState((prev) => ({
-            ...prev,
-            error: "Connection error. Check if SensorServer is running.",
-          }));
+          log("WebSocket error event:", event);
+          // Check if it's a mixed content issue
+          if (typeof window !== "undefined" && window.location.protocol === "https:") {
+            setState((prev) => ({
+              ...prev,
+              error: "Cannot connect: browser blocks ws:// from https:// pages. Use http://localhost:3000 instead.",
+            }));
+          } else {
+            setState((prev) => ({
+              ...prev,
+              error: "Connection error. Check if SensorServer is running and IP is correct.",
+            }));
+          }
         };
 
         ws.onclose = (event) => {
-          log(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
+          log(`WebSocket closed: code=${event.code}, reason=${event.reason || "none"}`);
           setState((prev) => ({
             ...prev,
             isConnected: false,
@@ -221,6 +231,7 @@ export function useSensorServer(
         };
 
         wsRef.current = ws;
+        log("WebSocket object created, waiting for connection...");
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Failed to connect";
         log("Connection error:", errorMsg);
