@@ -48,7 +48,28 @@ Phase: Plumbing (Phase 1) - **MOSTLY COMPLETE**
 - ✅ Flow calculator (eye-only mode, since Pulsoid doesn't provide IBI)
 - ✅ Combined UI showing all metrics
 
-### Next Step: Custom Watch App for IBI/HRV
+### Priority 1: MediaPipe Calibration (DO THIS FIRST)
+The eye tracking metrics are currently unreliable because they use hardcoded thresholds. Before adding more sensors, fix the foundation.
+
+**Problems with current implementation:**
+- EAR (Eye Aspect Ratio) baseline varies per person based on eye shape
+- Gaze "center" is wherever you happened to look when tracking started
+- Blink detection threshold (0.2) may be too sensitive or not sensitive enough
+- Flow score from uncalibrated data is essentially noise
+
+**Calibration flow to implement:**
+1. "Look straight at camera" → capture gaze center baseline
+2. "Blink 5 times" → capture personal EAR range (open vs closed)
+3. "Look at corners" → capture gaze range for stability calculation
+4. Store calibration data in localStorage
+5. Use personal baselines instead of hardcoded values
+
+**Files to modify:**
+- `src/hooks/use-eye-tracking.ts` - add calibration state and logic
+- `src/lib/mediapipe/metrics-calculator.ts` - use calibrated values
+- `src/app/page.tsx` - add calibration UI/flow
+
+### Priority 2: Custom Watch App for IBI/HRV
 The webapp is functional but Pulsoid only provides HR, not IBI data needed for proper HRV calculation. Need a custom Galaxy Watch 8 app to stream both HR and IBI.
 
 ### Custom Watch App Spec (for Gemini/Codex)
