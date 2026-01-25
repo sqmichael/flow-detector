@@ -7,9 +7,9 @@
 
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
-// CDN URL for MediaPipe WASM files
+// CDN URL for MediaPipe WASM files (pinned to 0.10.3 for stability)
 const MEDIAPIPE_WASM_CDN =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm";
 
 // Singleton instance
 let faceLandmarkerInstance: FaceLandmarker | null = null;
