@@ -120,7 +120,7 @@ export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps)
           <ReadingText />
           <ProgressBar
             progress={progress}
-            label={`Capturing working baseline... ${Math.floor(progress * 60)}s / 60s`}
+            label={`Capturing working baseline... ${Math.floor(progress * 30)}s / 30s`}
           />
         </>
       )}
@@ -278,22 +278,38 @@ function ReadingText() {
         lineHeight: 1.8,
         color: "#ccc",
         fontSize: "1rem",
+        maxHeight: "300px",
+        overflowY: "auto",
       }}
     >
       <p style={{ marginBottom: "1rem" }}>
         Flow state is characterized by complete absorption in an activity. When you&apos;re in flow,
         time seems to pass differently, and you feel fully engaged with what you&apos;re doing. This
-        state was first described by psychologist Mihaly Csikszentmihalyi.
+        state was first described by psychologist Mihaly Csikszentmihalyi in his research on optimal
+        experience and human performance.
       </p>
       <p style={{ marginBottom: "1rem" }}>
         Research shows that flow states have measurable physiological signatures. Heart rate
         variability tends to show a specific pattern—elevated but stable, reflecting engaged arousal
-        without anxiety. Blink rates decrease significantly as visual attention intensifies.
+        without anxiety. Blink rates decrease significantly as visual attention intensifies, often
+        dropping from the typical 15-20 blinks per minute to as few as 5-10 during deep focus.
+      </p>
+      <p style={{ marginBottom: "1rem" }}>
+        Eye movement patterns also change during flow. Gaze becomes more stable and focused, with
+        fewer saccades and longer fixation durations. The pupil may dilate slightly, indicating
+        increased cognitive engagement. These subtle changes can be detected through careful
+        measurement and compared against your personal baseline.
+      </p>
+      <p style={{ marginBottom: "1rem" }}>
+        The challenge of flow detection lies in distinguishing genuine focused attention from
+        fatigue or zoning out. Both can produce reduced blink rates, but their eye movement
+        patterns differ. Flow shows purposeful, engaged gaze patterns, while fatigue produces
+        more erratic or unfocused eye movements.
       </p>
       <p>
-        Keep reading naturally. This calibration captures your normal reading patterns—how often you
-        blink, how your eyes move, and how stable your gaze is. This establishes your personal
-        baseline so we can detect when you enter a deeper focus state.
+        Keep reading naturally at your normal pace. This calibration captures your typical reading
+        behavior—blink frequency, eye movement patterns, and gaze stability. These measurements
+        establish your personal baseline so the system can detect when you shift into deeper focus.
       </p>
     </div>
   );

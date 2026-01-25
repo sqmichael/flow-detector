@@ -140,7 +140,7 @@ export const CALIBRATION_STEPS: Record<
     nextStep: "working-baseline",
   },
   "working-baseline": {
-    duration: 60000, // 60 seconds of normal activity
+    duration: 30000, // 30 seconds of normal activity
     instruction: "Read the text below naturally. This captures your working baseline.",
     nextStep: "complete",
   },
