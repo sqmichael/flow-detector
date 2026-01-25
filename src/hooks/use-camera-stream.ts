@@ -23,7 +23,7 @@ export interface UseCameraStreamReturn {
   /** Current state of the camera stream */
   state: CameraStreamState;
   /** Reference to attach to a video element */
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  videoRef: React.RefObject<HTMLVideoElement>;
   /** Request camera permission and start stream */
   startStream: () => Promise<boolean>;
   /** Stop the stream and release resources */
@@ -54,7 +54,7 @@ export function useCameraStream(): UseCameraStreamReturn {
     isLoading: false,
   });
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   /**

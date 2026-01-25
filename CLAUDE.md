@@ -40,8 +40,19 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV from
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Plumbing
-Task: Set up Claude Code hooks and implementation plan for Watch Bridge
+Phase: Plumbing (Phase 1)
+Task: Implementing Watch Bridge - receive HR/HRV from Galaxy Watch via SensorServer
+
+### Watch Bridge Architecture
+```
+Galaxy Watch → Samsung Fold (SensorServer app) → WebSocket → MacBook (this app)
+SensorServer URL: ws://<fold-ip>:8080
+```
+
+### Combined Flow Formula
+```
+Flow = (HRV × GazeStability) - BlinkPenalty
+```
 
 ## Key Data Sources
 
@@ -91,11 +102,14 @@ src/
 ├── hooks/           # React hooks for each sensor
 │   ├── use-camera-stream.ts    ✓ Done
 │   ├── use-eye-tracking.ts     ✓ Done
-│   ├── use-watch-stream.ts     TODO (Phase 1)
+│   ├── use-sensor-server.ts    ✓ Done (Phase 1)
 │   └── use-mudra-stream.ts     TODO (Phase 2)
 ├── lib/
 │   ├── mediapipe/              ✓ Done
-│   ├── sensor-server/          TODO (Phase 1)
+│   ├── biometrics/             ✓ Done (Phase 1)
+│   │   ├── types.ts            # HR/HRV/Combined types
+│   │   ├── hrv-calculator.ts   # RMSSD/SDNN calculations
+│   │   └── flow-calculator.ts  # Combined flow scoring
 │   └── flow-calculator/        TODO (Phase 3)
 └── components/
     └── flow-dashboard/         TODO (Phase 3)

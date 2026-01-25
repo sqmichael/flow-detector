@@ -1,22 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
+import { useSensorServer } from "@/hooks/use-sensor-server";
+import { calculateCombinedFlow } from "@/lib/biometrics/flow-calculator";
 import type { AggregatedEyeMetrics } from "@/lib/mediapipe/types";
+import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
 
 export default function Home() {
   const { state: cameraState, videoRef, startStream, stopStream } = useCameraStream();
   const [isTracking, setIsTracking] = useState(false);
-  const [metricsHistory, setMetricsHistory] = useState<AggregatedEyeMetrics[]>([]);
+  const [metricsHistory, setMetricsHistory] = useState<CombinedFlowMetrics[]>([]);
+
+  // Watch connection state
+  const [serverIp, setServerIp] = useState("");
+  const {
+    isConnected: watchConnected,
+    heartRate,
+    hrv,
+    error: watchError,
+    connect: connectWatch,
+    disconnect: disconnectWatch,
+  } = useSensorServer();
 
   const { state: trackingState, metrics, start, stop } = useEyeTracking({
     videoElement: videoRef.current,
     enabled: isTracking,
     onMetrics: (m) => {
-      setMetricsHistory((prev) => [...prev.slice(-11), m]);
+      // Calculate combined flow when we get eye metrics
+      const combined = calculateCombinedFlow(m, hrv, heartRate);
+      setMetricsHistory((prev) => [...prev.slice(-11), combined]);
     },
   });
+
+  // Calculate combined metrics from current eye metrics and watch data
+  const combinedMetrics = useMemo(() => {
+    if (!metrics) return null;
+    return calculateCombinedFlow(metrics, hrv, heartRate);
+  }, [metrics, hrv, heartRate]);
 
   const handleStart = async () => {
     const streamStarted = await startStream();
@@ -30,6 +52,12 @@ export default function Home() {
     stop();
     stopStream();
     setMetricsHistory([]);
+  };
+
+  const handleWatchConnect = () => {
+    if (serverIp.trim()) {
+      connectWatch(serverIp.trim());
+    }
   };
 
   const getFlowColor = (value: number) => {
@@ -48,12 +76,13 @@ export default function Home() {
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
-        Eye tracking for cognitive flow state detection using MediaPipe
+        Multi-sensor flow state detection using eye tracking + heart rate variability
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2rem" }}>
-        {/* Video Feed */}
+        {/* Left Column - Video & Controls */}
         <div>
+          {/* Video Feed */}
           <div
             style={{
               position: "relative",
@@ -92,6 +121,7 @@ export default function Home() {
             )}
           </div>
 
+          {/* Camera Controls */}
           <div style={{ marginTop: "1rem", display: "flex", gap: "1rem" }}>
             {!cameraState.stream ? (
               <button
@@ -134,11 +164,157 @@ export default function Home() {
           {trackingState.error && (
             <p style={{ color: "#ef4444", marginTop: "0.5rem" }}>{trackingState.error}</p>
           )}
+
+          {/* Watch Connection Panel */}
+          <div
+            style={{
+              marginTop: "1.5rem",
+              padding: "1rem",
+              backgroundColor: "#1a1a1a",
+              borderRadius: "12px",
+              border: "1px solid #333",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <span style={{ fontWeight: "bold" }}>Galaxy Watch</span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  fontSize: "0.875rem",
+                  color: watchConnected ? "#22c55e" : "#888",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    backgroundColor: watchConnected ? "#22c55e" : "#666",
+                  }}
+                />
+                {watchConnected ? "Connected" : "Disconnected"}
+              </span>
+            </div>
+
+            {!watchConnected ? (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  value={serverIp}
+                  onChange={(e) => setServerIp(e.target.value)}
+                  placeholder="Fold IP (e.g., 192.168.1.100)"
+                  style={{
+                    flex: 1,
+                    padding: "0.5rem 0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    border: "1px solid #333",
+                    borderRadius: "6px",
+                    color: "#fff",
+                    fontSize: "0.875rem",
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleWatchConnect();
+                  }}
+                />
+                <button
+                  onClick={handleWatchConnect}
+                  disabled={!serverIp.trim()}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    backgroundColor: serverIp.trim() ? "#3b82f6" : "#333",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: serverIp.trim() ? "pointer" : "not-allowed",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  Connect
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <span style={{ flex: 1, fontSize: "0.875rem", color: "#888" }}>
+                  {serverIp}
+                </span>
+                <button
+                  onClick={disconnectWatch}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    backgroundColor: "#ef4444",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  Disconnect
+                </button>
+              </div>
+            )}
+
+            {watchError && (
+              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                {watchError}
+              </p>
+            )}
+
+            {/* Watch Metrics */}
+            {watchConnected && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "0.75rem",
+                  marginTop: "1rem",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
+                    {heartRate ?? "--"}
+                    <span style={{ fontSize: "0.875rem", fontWeight: "normal" }}> BPM</span>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>HRV (RMSSD)</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#8b5cf6" }}>
+                    {hrv ? hrv.rmssd.toFixed(1) : "--"}
+                    <span style={{ fontSize: "0.875rem", fontWeight: "normal" }}> ms</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Metrics Display */}
+        {/* Right Column - Metrics Display */}
         <div>
-          {metrics ? (
+          {combinedMetrics ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
               {/* Flow Indicator */}
               <div
@@ -151,26 +327,31 @@ export default function Home() {
                 }}
               >
                 <div style={{ fontSize: "0.875rem", color: "#888", marginBottom: "0.5rem" }}>
-                  Flow State
+                  {combinedMetrics.hasWatchData ? "Combined Flow State" : "Flow State (Eye Only)"}
                 </div>
                 <div
                   style={{
                     fontSize: "3rem",
                     fontWeight: "bold",
-                    color: getFlowColor(metrics.eyeFlowIndicator),
+                    color: getFlowColor(combinedMetrics.combinedFlowScore),
                   }}
                 >
-                  {(metrics.eyeFlowIndicator * 100).toFixed(0)}%
+                  {(combinedMetrics.combinedFlowScore * 100).toFixed(0)}%
                 </div>
                 <div
                   style={{
                     fontSize: "1.25rem",
-                    color: getFlowColor(metrics.eyeFlowIndicator),
+                    color: getFlowColor(combinedMetrics.combinedFlowScore),
                     marginTop: "0.25rem",
                   }}
                 >
-                  {getFlowLabel(metrics.eyeFlowIndicator)}
+                  {getFlowLabel(combinedMetrics.combinedFlowScore)}
                 </div>
+                {!combinedMetrics.hasWatchData && (
+                  <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.5rem" }}>
+                    Connect watch for combined metrics
+                  </div>
+                )}
               </div>
 
               {/* Detailed Metrics */}
@@ -183,23 +364,23 @@ export default function Home() {
               >
                 <MetricCard
                   label="Blink Rate"
-                  value={`${metrics.blinkRate.toFixed(1)}/min`}
+                  value={`${combinedMetrics.blinkRate.toFixed(1)}/min`}
                   subtitle="Optimal: 3-15"
                 />
                 <MetricCard
                   label="Gaze Stability"
-                  value={`${(metrics.gazeStability * 100).toFixed(0)}%`}
+                  value={`${(combinedMetrics.gazeStability * 100).toFixed(0)}%`}
                   subtitle="Higher is better"
                 />
                 <MetricCard
                   label="Eye Openness"
-                  value={`${(metrics.averageEAR * 100).toFixed(0)}%`}
+                  value={`${(combinedMetrics.averageEAR * 100).toFixed(0)}%`}
                   subtitle="EAR average"
                 />
                 <MetricCard
-                  label="Frames"
-                  value={metrics.frameCount.toString()}
-                  subtitle="Last 5 seconds"
+                  label="Eye Flow"
+                  value={`${(combinedMetrics.eyeFlowIndicator * 100).toFixed(0)}%`}
+                  subtitle="Eye-only score"
                 />
               </div>
 
@@ -222,8 +403,8 @@ export default function Home() {
                         key={i}
                         style={{
                           flex: 1,
-                          height: `${m.eyeFlowIndicator * 100}%`,
-                          backgroundColor: getFlowColor(m.eyeFlowIndicator),
+                          height: `${m.combinedFlowScore * 100}%`,
+                          backgroundColor: getFlowColor(m.combinedFlowScore),
                           borderRadius: "2px",
                           minHeight: "4px",
                         }}
