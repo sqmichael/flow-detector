@@ -40,27 +40,61 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV from
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Plumbing (Phase 1)
-Task: Implementing Watch Bridge - receive HR/HRV from Galaxy Watch via SensorServer
+Phase: Plumbing (Phase 1) - **MOSTLY COMPLETE**
 
-### Watch Bridge Architecture
+### What's Working
+- ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
+- ✅ Heart rate streaming via Pulsoid WebSocket
+- ✅ Flow calculator (eye-only mode, since Pulsoid doesn't provide IBI)
+- ✅ Combined UI showing all metrics
+
+### Next Step: Custom Watch App for IBI/HRV
+The webapp is functional but Pulsoid only provides HR, not IBI data needed for proper HRV calculation. Need a custom Galaxy Watch 8 app to stream both HR and IBI.
+
+### Custom Watch App Spec (for Gemini/Codex)
 ```
-Galaxy Watch → Samsung Fold (SensorServer app) → WebSocket → MacBook (this app)
-SensorServer URL: ws://<fold-ip>:8080
+Platform: Wear OS 4+ (Galaxy Watch 8)
+Language: Kotlin
+SDK: Health Services API (not deprecated WearableListenerService)
+
+Features:
+1. Read heart rate sensor events
+2. Calculate IBI from timestamp differences between beats
+3. Send JSON over WebSocket to configurable IP
+
+Output format (matches use-sensor-server.ts):
+{
+  "values": [heartRate, ibi],  // HR in BPM, IBI in milliseconds
+  "timestamp": 1706000000000,  // Unix timestamp ms
+  "accuracy": 3                // Sensor accuracy
+}
+
+Permissions needed:
+- BODY_SENSORS (for heart rate)
+- INTERNET (for WebSocket)
+
+UI: Simple screen showing:
+- Current HR
+- Connection status
+- IP address input field
+- Connect/Disconnect button
 ```
 
-### Combined Flow Formula
+### Watch App Architecture
 ```
-Flow = (HRV × GazeStability) - BlinkPenalty
+Galaxy Watch 8 (Custom App) → WebSocket Client → MacBook (this app)
+MacBook WebSocket Server: ws://macbook-ip:8080
 ```
+
+Note: The watch app is a WebSocket CLIENT that connects to a server on the MacBook. We'll need to add a simple WebSocket server to this Next.js app, or run a standalone Node server.
 
 ## Key Data Sources
 
-### 1. Galaxy Watch 7 (via SensorServer)
-- **Tool**: SensorServer app on Z Flip
-- **Protocol**: WebSocket server on phone
-- **Data**: Heart Rate, IBI (Inter-Beat Interval) for HRV
-- **Access**: Samsung Health Data SDK (Privileged Access on Z Flip)
+### 1. Galaxy Watch 8 (Custom App - TODO)
+- **Platform**: Wear OS 4+ with Health Services API
+- **Protocol**: WebSocket client connecting to MacBook
+- **Data**: Heart Rate + IBI (Inter-Beat Interval) for HRV
+- **Why Custom**: Pulsoid/SensorServer don't expose IBI data
 
 ### 2. Mudra Link (Neural)
 - **Repo**: Mudra Android App Example
@@ -99,16 +133,17 @@ Flow = (HRV × Rhythm) - Blinks
 
 ```
 src/
-├── hooks/           # React hooks for each sensor
-│   ├── use-camera-stream.ts    ✓ Done
-│   ├── use-eye-tracking.ts     ✓ Done
-│   ├── use-sensor-server.ts    ✓ Done (Phase 1)
+├── hooks/
+│   ├── use-camera-stream.ts    ✅ Camera permission & MediaStream
+│   ├── use-eye-tracking.ts     ✅ MediaPipe face landmarks → blink/gaze
+│   ├── use-pulsoid.ts          ✅ Pulsoid WebSocket (HR only, no IBI)
+│   ├── use-sensor-server.ts    ✅ Ready for custom watch app (HR + IBI)
 │   └── use-mudra-stream.ts     TODO (Phase 2)
 ├── lib/
-│   ├── mediapipe/              ✓ Done
-│   ├── biometrics/             ✓ Done (Phase 1)
+│   ├── mediapipe/              ✅ Face Landmarker wrapper
+│   ├── biometrics/             ✅
 │   │   ├── types.ts            # HR/HRV/Combined types
-│   │   ├── hrv-calculator.ts   # RMSSD/SDNN calculations
+│   │   ├── hrv-calculator.ts   # RMSSD/SDNN from IBI data
 │   │   └── flow-calculator.ts  # Combined flow scoring
 │   └── flow-calculator/        TODO (Phase 3)
 └── components/
