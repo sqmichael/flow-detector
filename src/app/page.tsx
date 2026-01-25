@@ -1,35 +1,36 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
-import { useSensorServer } from "@/hooks/use-sensor-server";
+import { usePulsoid } from "@/hooks/use-pulsoid";
 import { calculateCombinedFlow } from "@/lib/biometrics/flow-calculator";
-import type { AggregatedEyeMetrics } from "@/lib/mediapipe/types";
 import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
+
+// Your Pulsoid token - in production, this would be in env vars
+const PULSOID_TOKEN = "d844e5e9-2b04-4597-9d57-979904a40dff";
 
 export default function Home() {
   const { state: cameraState, videoRef, startStream, stopStream } = useCameraStream();
   const [isTracking, setIsTracking] = useState(false);
   const [metricsHistory, setMetricsHistory] = useState<CombinedFlowMetrics[]>([]);
 
-  // Watch connection state
-  const [serverIp, setServerIp] = useState("");
+  // Pulsoid connection for heart rate
   const {
     isConnected: watchConnected,
     heartRate,
-    hrv,
     error: watchError,
-    connect: connectWatch,
-    disconnect: disconnectWatch,
-  } = useSensorServer();
+    connect: connectPulsoid,
+    disconnect: disconnectPulsoid,
+  } = usePulsoid();
 
-  const { state: trackingState, metrics, start, stop } = useEyeTracking({
+  const { state: trackingState, metrics } = useEyeTracking({
     videoElement: videoRef.current,
     enabled: isTracking,
     onMetrics: (m) => {
       // Calculate combined flow when we get eye metrics
-      const combined = calculateCombinedFlow(m, hrv, heartRate);
+      // Note: Pulsoid doesn't provide HRV, so we pass null
+      const combined = calculateCombinedFlow(m, null, heartRate);
       setMetricsHistory((prev) => [...prev.slice(-11), combined]);
     },
   });
@@ -37,8 +38,8 @@ export default function Home() {
   // Calculate combined metrics from current eye metrics and watch data
   const combinedMetrics = useMemo(() => {
     if (!metrics) return null;
-    return calculateCombinedFlow(metrics, hrv, heartRate);
-  }, [metrics, hrv, heartRate]);
+    return calculateCombinedFlow(metrics, null, heartRate);
+  }, [metrics, heartRate]);
 
   const handleStart = async () => {
     const streamStarted = await startStream();
@@ -49,15 +50,12 @@ export default function Home() {
 
   const handleStop = () => {
     setIsTracking(false);
-    stop();
     stopStream();
     setMetricsHistory([]);
   };
 
   const handleWatchConnect = () => {
-    if (serverIp.trim()) {
-      connectWatch(serverIp.trim());
-    }
+    connectPulsoid(PULSOID_TOKEN);
   };
 
   const getFlowColor = (value: number) => {
@@ -76,7 +74,7 @@ export default function Home() {
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
-        Multi-sensor flow state detection using eye tracking + heart rate variability
+        Multi-sensor flow state detection using eye tracking + heart rate
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2rem" }}>
@@ -183,7 +181,7 @@ export default function Home() {
                 marginBottom: "0.75rem",
               }}
             >
-              <span style={{ fontWeight: "bold" }}>Galaxy Watch</span>
+              <span style={{ fontWeight: "bold" }}>Galaxy Watch (Pulsoid)</span>
               <span
                 style={{
                   display: "inline-flex",
@@ -206,61 +204,37 @@ export default function Home() {
             </div>
 
             {!watchConnected ? (
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input
-                  type="text"
-                  value={serverIp}
-                  onChange={(e) => setServerIp(e.target.value)}
-                  placeholder="Fold IP (e.g., 192.168.1.100)"
-                  style={{
-                    flex: 1,
-                    padding: "0.5rem 0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    border: "1px solid #333",
-                    borderRadius: "6px",
-                    color: "#fff",
-                    fontSize: "0.875rem",
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleWatchConnect();
-                  }}
-                />
-                <button
-                  onClick={handleWatchConnect}
-                  disabled={!serverIp.trim()}
-                  style={{
-                    padding: "0.5rem 1rem",
-                    backgroundColor: serverIp.trim() ? "#3b82f6" : "#333",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: serverIp.trim() ? "pointer" : "not-allowed",
-                    fontSize: "0.875rem",
-                  }}
-                >
-                  Connect
-                </button>
-              </div>
+              <button
+                onClick={handleWatchConnect}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#3b82f6",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Connect to Pulsoid
+              </button>
             ) : (
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                <span style={{ flex: 1, fontSize: "0.875rem", color: "#888" }}>
-                  {serverIp}
-                </span>
-                <button
-                  onClick={disconnectWatch}
-                  style={{
-                    padding: "0.5rem 1rem",
-                    backgroundColor: "#ef4444",
-                    color: "#fff",
-                    border: "none",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "0.875rem",
-                  }}
-                >
-                  Disconnect
-                </button>
-              </div>
+              <button
+                onClick={disconnectPulsoid}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#ef4444",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Disconnect
+              </button>
             )}
 
             {watchError && (
@@ -273,39 +247,17 @@ export default function Home() {
             {watchConnected && (
               <div
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.75rem",
                   marginTop: "1rem",
+                  padding: "0.75rem",
+                  backgroundColor: "#0a0a0a",
+                  borderRadius: "8px",
+                  textAlign: "center",
                 }}
               >
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
-                    {heartRate ?? "--"}
-                    <span style={{ fontSize: "0.875rem", fontWeight: "normal" }}> BPM</span>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>HRV (RMSSD)</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#8b5cf6" }}>
-                    {hrv ? hrv.rmssd.toFixed(1) : "--"}
-                    <span style={{ fontSize: "0.875rem", fontWeight: "normal" }}> ms</span>
-                  </div>
+                <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
+                <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#ef4444" }}>
+                  {heartRate ?? "--"}
+                  <span style={{ fontSize: "1rem", fontWeight: "normal" }}> BPM</span>
                 </div>
               </div>
             )}
