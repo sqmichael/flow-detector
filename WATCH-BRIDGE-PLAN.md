@@ -16,11 +16,23 @@ Before starting, ensure you have:
 
 ---
 
+## Repository
+
+GitHub: https://github.com/sqmichael/flow-detector
+
+---
+
 ## Setup Commands
 
 ```bash
-# 1. Pull the latest code with hooks
+# 1. Clone the repo (if you don't have it)
+git clone https://github.com/sqmichael/flow-detector.git
+cd flow-detector
+
+# Or if you already have it:
 cd /Users/user/Documents/Code\ Repo/flow-detector
+
+# 2. Pull the latest code with hooks
 git fetch origin claude/setup-project-hooks-LTvBw
 git checkout claude/setup-project-hooks-LTvBw
 
