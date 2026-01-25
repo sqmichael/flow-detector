@@ -1,11 +1,14 @@
 # Dependencies
 node_modules/
 
-# Build output
-dist/
-build/
+# Next.js
+.next/
+out/
 
-# Environment files
+# Debug
+npm-debug.log*
+
+# Environment
 .env
 .env.local
 .env.*.local
@@ -19,10 +22,3 @@ build/
 # OS
 .DS_Store
 Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-
-# Claude Code local settings (not shared)
-.claude/settings.local.json

@@ -23,6 +23,22 @@ import {
   DEFAULT_EYE_TRACKING_CONFIG,
 } from "./types";
 
+// Debug logging configuration
+const DEBUG_CONFIG = {
+  logRawLandmarks: true,      // Log raw x,y,z coordinates from MediaPipe
+  logEARCalculation: true,    // Log Eye Aspect Ratio math
+  logGazeCalculation: true,   // Log gaze vector calculation
+  logBlinkDetection: true,    // Log blink state changes
+  logEveryNthFrame: 30,       // Only log every Nth frame (reduce spam)
+  logAggregation: true,       // Log aggregation details
+};
+
+let frameCounter = 0;
+
+function shouldLog(): boolean {
+  return frameCounter % DEBUG_CONFIG.logEveryNthFrame === 0;
+}
+
 /**
  * Calculate Euclidean distance between two landmarks
  */
@@ -55,7 +71,7 @@ export function extractEyeLandmarks(
     return null;
   }
 
-  return {
+  const eyeLandmarks = {
     rightEye: {
       outer: landmarks[indices.rightEye.outer],
       inner: landmarks[indices.rightEye.inner],
@@ -79,6 +95,38 @@ export function extractEyeLandmarks(
       center: landmarks[indices.leftIris.center],
     },
   };
+
+  // Log raw landmark positions for verification
+  if (DEBUG_CONFIG.logRawLandmarks && shouldLog()) {
+    const rIris = eyeLandmarks.rightIris.center;
+    const lIris = eyeLandmarks.leftIris.center;
+    const rOuter = eyeLandmarks.rightEye.outer;
+    const rInner = eyeLandmarks.rightEye.inner;
+
+    // Sanity checks
+    const warnings: string[] = [];
+    if (rIris.x < 0 || rIris.x > 1) warnings.push('Right iris X out of range!');
+    if (rIris.y < 0 || rIris.y > 1) warnings.push('Right iris Y out of range!');
+    if (lIris.x < 0 || lIris.x > 1) warnings.push('Left iris X out of range!');
+    if (lIris.y < 0 || lIris.y > 1) warnings.push('Left iris Y out of range!');
+
+    // Check iris is within eye bounds (approximately)
+    const eyeWidth = Math.abs(rOuter.x - rInner.x);
+    if (eyeWidth < 0.01) warnings.push('Eye width suspiciously small!');
+    if (eyeWidth > 0.2) warnings.push('Eye width suspiciously large!');
+
+    console.log(
+      `[RAW LANDMARKS] Frame ${frameCounter}\n` +
+      `  Right Iris: x=${rIris.x.toFixed(4)}, y=${rIris.y.toFixed(4)}, z=${(rIris.z ?? 0).toFixed(4)}\n` +
+      `  Left Iris:  x=${lIris.x.toFixed(4)}, y=${lIris.y.toFixed(4)}, z=${(lIris.z ?? 0).toFixed(4)}\n` +
+      `  Right Eye:  outer=(${rOuter.x.toFixed(4)}, ${rOuter.y.toFixed(4)}) inner=(${rInner.x.toFixed(4)}, ${rInner.y.toFixed(4)})\n` +
+      `  Eye Width:  ${(eyeWidth * 100).toFixed(2)}% of frame\n` +
+      `  → Values should be 0-1 (normalized). Iris should be between outer/inner x coords.\n` +
+      (warnings.length > 0 ? `  ⚠️ WARNINGS: ${warnings.join(', ')}` : '  ✅ All sanity checks passed')
+    );
+  }
+
+  return eyeLandmarks;
 }
 
 /**
@@ -115,11 +163,30 @@ export function calculateEAR(landmarks: EyeLandmarks): EyeAspectRatios {
   const leftEAR = calculateSingleEAR(landmarks.leftEye);
   const rightEAR = calculateSingleEAR(landmarks.rightEye);
 
-  return {
+  const result = {
     left: leftEAR,
     right: rightEAR,
     average: (leftEAR + rightEAR) / 2,
   };
+
+  // Log EAR calculation for verification
+  if (DEBUG_CONFIG.logEARCalculation && shouldLog()) {
+    // Calculate the raw distances for transparency
+    const rEye = landmarks.rightEye;
+    const v1 = distance(rEye.upper1, rEye.lower1);
+    const v2 = distance(rEye.upper2, rEye.lower2);
+    const h = distance(rEye.outer, rEye.inner);
+
+    console.log(
+      `[EAR CALCULATION] Frame ${frameCounter}\n` +
+      `  Right Eye: v1=${v1.toFixed(4)}, v2=${v2.toFixed(4)}, h=${h.toFixed(4)}\n` +
+      `  Formula: EAR = (v1 + v2) / (2 * h) = (${v1.toFixed(4)} + ${v2.toFixed(4)}) / (2 * ${h.toFixed(4)})\n` +
+      `  Results: Left=${result.left.toFixed(3)}, Right=${result.right.toFixed(3)}, Avg=${result.average.toFixed(3)}\n` +
+      `  → Normal open eye: 0.25-0.35 | Blink threshold: <0.20 | Currently: ${result.average < 0.2 ? 'EYES CLOSED' : 'EYES OPEN'}`
+    );
+  }
+
+  return result;
 }
 
 /**
@@ -187,6 +254,24 @@ export function calculateGaze(
     x: (leftGaze.x + rightGaze.x) / 2,
     y: (leftGaze.y + rightGaze.y) / 2,
   };
+
+  // Log gaze calculation for verification
+  if (DEBUG_CONFIG.logGazeCalculation && shouldLog()) {
+    const gazeDirection = (x: number, y: number): string => {
+      const h = x < -0.3 ? 'LEFT' : x > 0.3 ? 'RIGHT' : 'CENTER';
+      const v = y < -0.3 ? 'DOWN' : y > 0.3 ? 'UP' : 'CENTER';
+      return `${h}-${v}`;
+    };
+
+    console.log(
+      `[GAZE CALCULATION] Frame ${frameCounter}\n` +
+      `  Left Eye Gaze:  x=${leftGaze.x.toFixed(3)}, y=${leftGaze.y.toFixed(3)}\n` +
+      `  Right Eye Gaze: x=${rightGaze.x.toFixed(3)}, y=${rightGaze.y.toFixed(3)}\n` +
+      `  Combined Gaze:  x=${combined.x.toFixed(3)}, y=${combined.y.toFixed(3)}\n` +
+      `  → Direction: ${gazeDirection(combined.x, combined.y)}\n` +
+      `  → Range is -1 to 1. x: negative=left, positive=right. y: negative=down, positive=up`
+    );
+  }
 
   return {
     left: leftGaze,
@@ -259,18 +344,32 @@ export function updateBlinkState(
     // Blink starting
     newState.isBlinking = true;
     newState.blinkStartTime = timestamp;
+
+    if (DEBUG_CONFIG.logBlinkDetection) {
+      console.log(
+        `[BLINK DETECTED] 👁️ BLINK START at ${timestamp.toFixed(0)}ms\n` +
+        `  EAR dropped to ${ear.average.toFixed(3)} (threshold: ${config.blinkEARThreshold})\n` +
+        `  → Eyes are now CLOSED`
+      );
+    }
   } else if (!isEyesClosed && currentState.isBlinking) {
     // Blink ending
     newState.isBlinking = false;
 
     if (currentState.blinkStartTime !== null) {
       const duration = timestamp - currentState.blinkStartTime;
+      const isValidBlink = duration >= config.minBlinkDurationMs && duration <= config.maxBlinkDurationMs;
+
+      if (DEBUG_CONFIG.logBlinkDetection) {
+        console.log(
+          `[BLINK DETECTED] 👁️ BLINK END at ${timestamp.toFixed(0)}ms\n` +
+          `  Duration: ${duration.toFixed(0)}ms (valid range: ${config.minBlinkDurationMs}-${config.maxBlinkDurationMs}ms)\n` +
+          `  → ${isValidBlink ? '✅ VALID BLINK COUNTED' : '❌ INVALID (too short or too long)'}`
+        );
+      }
 
       // Validate blink duration
-      if (
-        duration >= config.minBlinkDurationMs &&
-        duration <= config.maxBlinkDurationMs
-      ) {
+      if (isValidBlink) {
         const blinkEvent: BlinkEvent = {
           timestamp: currentState.blinkStartTime,
           duration,
@@ -324,9 +423,14 @@ export function calculateFrameMetrics(
   result: FaceLandmarkerResult,
   timestamp: number
 ): FrameEyeMetrics | null {
+  frameCounter++;
+
   const landmarks = extractEyeLandmarks(result);
 
   if (!landmarks) {
+    if (shouldLog()) {
+      console.log(`[FRAME ${frameCounter}] ⚠️ No face detected in frame`);
+    }
     return null;
   }
 
@@ -432,7 +536,7 @@ export function aggregateMetrics(
   // Calculate flow indicator
   const eyeFlowIndicator = calculateEyeFlowIndicator(blinkRate, gazeStability);
 
-  return {
+  const result = {
     blinkRate,
     gazeStability,
     averageEAR,
@@ -441,4 +545,33 @@ export function aggregateMetrics(
     windowEnd,
     frameCount: frameHistory.length,
   };
+
+  // Log aggregation details for verification
+  if (DEBUG_CONFIG.logAggregation) {
+    const windowDurationSec = ((windowEnd - windowStart) / 1000).toFixed(1);
+    const fps = (frameHistory.length / ((windowEnd - windowStart) / 1000)).toFixed(1);
+
+    console.log(
+      `\n${'='.repeat(60)}\n` +
+      `[AGGREGATION COMPLETE] 5-Second Window Summary\n` +
+      `${'='.repeat(60)}\n` +
+      `  Window Duration: ${windowDurationSec}s | Frames Processed: ${frameHistory.length} (~${fps} FPS)\n` +
+      `\n  📊 METRICS:\n` +
+      `  ├─ Blink Rate:     ${blinkRate.toFixed(1)} blinks/min\n` +
+      `  │   → Optimal: 3-8/min (flow), Normal: 15-20/min, High: 20+/min\n` +
+      `  ├─ Gaze Stability: ${(gazeStability * 100).toFixed(1)}%\n` +
+      `  │   → >70%: focused, 50-70%: normal, <50%: distracted\n` +
+      `  ├─ Average EAR:    ${averageEAR.toFixed(3)}\n` +
+      `  │   → Open eyes: 0.25-0.35, Closed: <0.20\n` +
+      `  └─ Flow Indicator: ${(eyeFlowIndicator * 100).toFixed(1)}%\n` +
+      `      → Calculation: (blink_score × 0.4) + (gaze_score × 0.6)\n` +
+      `\n  🎯 INTERPRETATION:\n` +
+      `  ${eyeFlowIndicator >= 0.7 ? '🟢 IN FLOW STATE - High focus detected' :
+         eyeFlowIndicator >= 0.5 ? '🟡 MODERATE FOCUS - Normal engagement' :
+         '🔴 DISTRACTED - Low engagement detected'}\n` +
+      `${'='.repeat(60)}\n`
+    );
+  }
+
+  return result;
 }
