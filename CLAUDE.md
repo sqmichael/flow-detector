@@ -40,8 +40,8 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV from
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: [Plumbing / Neural-Vision / Logic / Shield]
-Task: [What you're working on]
+Phase: Plumbing
+Task: Set up Claude Code hooks and implementation plan for Watch Bridge
 
 ## Key Data Sources
 
