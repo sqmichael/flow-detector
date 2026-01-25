@@ -1,0 +1,302 @@
+/**
+ * Calibration Overlay Component
+ *
+ * Full-screen overlay that guides users through the calibration process.
+ * Shows step instructions, progress indicators, and visual targets.
+ */
+
+"use client";
+
+import type { CalibrationState } from "@/lib/calibration/types";
+
+interface CalibrationOverlayProps {
+  state: CalibrationState;
+  onCancel: () => void;
+}
+
+export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps) {
+  const { step, progress, instruction, blinksDetected, blinksRequired } = state;
+
+  // Don't render if not calibrating
+  if (step === "idle") {
+    return null;
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        backgroundColor: "rgba(0, 0, 0, 0.9)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: "2rem",
+      }}
+    >
+      {/* Cancel Button */}
+      <button
+        onClick={onCancel}
+        style={{
+          position: "absolute",
+          top: "1rem",
+          right: "1rem",
+          padding: "0.5rem 1rem",
+          backgroundColor: "transparent",
+          color: "#888",
+          border: "1px solid #444",
+          borderRadius: "6px",
+          cursor: "pointer",
+          fontSize: "0.875rem",
+        }}
+      >
+        Cancel
+      </button>
+
+      {/* Step Indicator */}
+      <div
+        style={{
+          display: "flex",
+          gap: "0.5rem",
+          marginBottom: "2rem",
+        }}
+      >
+        {["baseline", "blink", "gaze-center", "working-baseline"].map((s) => {
+          const stepOrder = ["baseline", "blink", "gaze-center", "working-baseline"];
+          const currentIndex = stepOrder.indexOf(step);
+          const thisIndex = stepOrder.indexOf(s);
+          const isComplete = step === "complete" || thisIndex < currentIndex;
+          const isCurrent = step === s;
+
+          return (
+            <div
+              key={s}
+              style={{
+                width: "12px",
+                height: "12px",
+                borderRadius: "50%",
+                backgroundColor: isCurrent ? "#3b82f6" : isComplete ? "#22c55e" : "#444",
+                transition: "background-color 0.3s",
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {/* Instruction Text */}
+      <div
+        style={{
+          fontSize: "1.5rem",
+          fontWeight: "bold",
+          color: "#fff",
+          textAlign: "center",
+          marginBottom: "2rem",
+          maxWidth: "400px",
+        }}
+      >
+        {instruction}
+      </div>
+
+      {/* Step-specific content */}
+      {step === "baseline" && (
+        <ProgressBar progress={progress} label="Capturing baseline..." />
+      )}
+
+      {step === "blink" && (
+        <BlinkCounter detected={blinksDetected} required={blinksRequired} />
+      )}
+
+      {step === "gaze-center" && (
+        <>
+          <GazeTarget />
+          <ProgressBar progress={progress} label="Capturing gaze center..." />
+        </>
+      )}
+
+      {step === "working-baseline" && (
+        <>
+          <ReadingText />
+          <ProgressBar
+            progress={progress}
+            label={`Capturing working baseline... ${Math.floor(progress * 60)}s / 60s`}
+          />
+        </>
+      )}
+
+      {step === "complete" && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "1rem",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "4rem",
+              color: "#22c55e",
+            }}
+          >
+            ✓
+          </div>
+          <div style={{ color: "#888", fontSize: "0.875rem" }}>
+            Calibration saved. You can recalibrate anytime.
+          </div>
+        </div>
+      )}
+
+      {/* Error display */}
+      {state.error && (
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "0.75rem 1rem",
+            backgroundColor: "rgba(239, 68, 68, 0.2)",
+            borderRadius: "8px",
+            color: "#ef4444",
+            fontSize: "0.875rem",
+          }}
+        >
+          {state.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Progress bar for timed steps
+ */
+function ProgressBar({ progress, label }: { progress: number; label: string }) {
+  return (
+    <div style={{ width: "100%", maxWidth: "300px" }}>
+      <div
+        style={{
+          height: "8px",
+          backgroundColor: "#333",
+          borderRadius: "4px",
+          overflow: "hidden",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${progress * 100}%`,
+            backgroundColor: "#3b82f6",
+            borderRadius: "4px",
+            transition: "width 0.1s linear",
+          }}
+        />
+      </div>
+      <div style={{ color: "#888", fontSize: "0.875rem", textAlign: "center" }}>
+        {label}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Blink counter circles
+ */
+function BlinkCounter({
+  detected,
+  required,
+}: {
+  detected: number;
+  required: number;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "1rem",
+        marginBottom: "1rem",
+      }}
+    >
+      {Array.from({ length: required }).map((_, i) => (
+        <div
+          key={i}
+          style={{
+            width: "32px",
+            height: "32px",
+            borderRadius: "50%",
+            backgroundColor: i < detected ? "#22c55e" : "transparent",
+            border: `2px solid ${i < detected ? "#22c55e" : "#444"}`,
+            transition: "all 0.2s",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+            fontSize: "1rem",
+          }}
+        >
+          {i < detected ? "✓" : ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Center dot target for gaze calibration
+ */
+function GazeTarget() {
+  return (
+    <div
+      style={{
+        width: "24px",
+        height: "24px",
+        borderRadius: "50%",
+        backgroundColor: "#3b82f6",
+        boxShadow: "0 0 20px rgba(59, 130, 246, 0.5)",
+        marginBottom: "2rem",
+        animation: "pulse 1.5s ease-in-out infinite",
+      }}
+    />
+  );
+}
+
+/**
+ * Reading text for working baseline calibration
+ *
+ * Provides natural reading content so the user behaves normally
+ * while we capture their working baseline metrics.
+ */
+function ReadingText() {
+  return (
+    <div
+      style={{
+        maxWidth: "600px",
+        padding: "1.5rem",
+        backgroundColor: "rgba(255, 255, 255, 0.05)",
+        borderRadius: "12px",
+        marginBottom: "2rem",
+        lineHeight: 1.8,
+        color: "#ccc",
+        fontSize: "1rem",
+      }}
+    >
+      <p style={{ marginBottom: "1rem" }}>
+        Flow state is characterized by complete absorption in an activity. When you&apos;re in flow,
+        time seems to pass differently, and you feel fully engaged with what you&apos;re doing. This
+        state was first described by psychologist Mihaly Csikszentmihalyi.
+      </p>
+      <p style={{ marginBottom: "1rem" }}>
+        Research shows that flow states have measurable physiological signatures. Heart rate
+        variability tends to show a specific pattern—elevated but stable, reflecting engaged arousal
+        without anxiety. Blink rates decrease significantly as visual attention intensifies.
+      </p>
+      <p>
+        Keep reading naturally. This calibration captures your normal reading patterns—how often you
+        blink, how your eyes move, and how stable your gaze is. This establishes your personal
+        baseline so we can detect when you enter a deeper focus state.
+      </p>
+    </div>
+  );
+}
+
+export default CalibrationOverlay;

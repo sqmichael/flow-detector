@@ -1,10 +1,18 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
 import { usePulsoid } from "@/hooks/use-pulsoid";
-import { calculateCombinedFlow } from "@/lib/biometrics/flow-calculator";
+import { useCalibration } from "@/hooks/use-calibration";
+import {
+  calculateCombinedFlow,
+  updateFlowDetector,
+  createFlowDetectorState,
+  type FlowDetectorState,
+} from "@/lib/biometrics/flow-calculator";
+import { formatCalibrationDate } from "@/lib/calibration/storage";
+import { CalibrationOverlay } from "@/components/calibration/CalibrationOverlay";
 import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
 
 // Your Pulsoid token - in production, this would be in env vars
@@ -15,6 +23,26 @@ export default function Home() {
   const [isTracking, setIsTracking] = useState(false);
   const [metricsHistory, setMetricsHistory] = useState<CombinedFlowMetrics[]>([]);
 
+  // Flow detector state for EMA smoothing
+  const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
+  const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
+
+  // Calibration
+  const {
+    state: calibrationState,
+    startCalibration,
+    cancelCalibration,
+    isCalibrating,
+    calibrationData,
+    hasCalibration,
+    clearStoredCalibration,
+  } = useCalibration({
+    videoElement: videoRef.current,
+    onComplete: (data) => {
+      console.log("[Page] Calibration complete:", data);
+    },
+  });
+
   // Pulsoid connection for heart rate
   const {
     isConnected: watchConnected,
@@ -24,22 +52,58 @@ export default function Home() {
     disconnect: disconnectPulsoid,
   } = usePulsoid();
 
+  // Callback to handle new metrics with EMA smoothing
+  const handleMetrics = useCallback(
+    (m: Parameters<typeof calculateCombinedFlow>[0]) => {
+      // Calculate combined flow with working baseline from calibration
+      const combined = calculateCombinedFlow(
+        m,
+        null,
+        heartRate,
+        calibrationData?.workingBaseline ?? null
+      );
+
+      // Update flow detector with EMA smoothing
+      const newFlowState = updateFlowDetector(
+        flowDetectorRef.current,
+        combined.combinedFlowScore,
+        Date.now()
+      );
+      flowDetectorRef.current = newFlowState;
+      setFlowState(newFlowState);
+
+      // Store in history with smoothed score
+      const smoothedCombined = {
+        ...combined,
+        combinedFlowScore: newFlowState.smoothedScore,
+      };
+      setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
+    },
+    [heartRate, calibrationData]
+  );
+
   const { state: trackingState, metrics } = useEyeTracking({
     videoElement: videoRef.current,
-    enabled: isTracking,
-    onMetrics: (m) => {
-      // Calculate combined flow when we get eye metrics
-      // Note: Pulsoid doesn't provide HRV, so we pass null
-      const combined = calculateCombinedFlow(m, null, heartRate);
-      setMetricsHistory((prev) => [...prev.slice(-11), combined]);
-    },
+    enabled: isTracking && !isCalibrating,
+    calibration: calibrationData,
+    onMetrics: handleMetrics,
   });
 
   // Calculate combined metrics from current eye metrics and watch data
   const combinedMetrics = useMemo(() => {
     if (!metrics) return null;
-    return calculateCombinedFlow(metrics, null, heartRate);
-  }, [metrics, heartRate]);
+    const combined = calculateCombinedFlow(
+      metrics,
+      null,
+      heartRate,
+      calibrationData?.workingBaseline ?? null
+    );
+    // Use smoothed score from flow detector
+    return {
+      ...combined,
+      combinedFlowScore: flowState.smoothedScore,
+    };
+  }, [metrics, heartRate, calibrationData, flowState.smoothedScore]);
 
   const handleStart = async () => {
     const streamStarted = await startStream();
@@ -52,6 +116,24 @@ export default function Home() {
     setIsTracking(false);
     stopStream();
     setMetricsHistory([]);
+    // Reset flow detector state
+    flowDetectorRef.current = createFlowDetectorState();
+    setFlowState(createFlowDetectorState());
+  };
+
+  const handleCalibrate = async () => {
+    // Need camera stream for calibration
+    if (!cameraState.stream) {
+      const streamStarted = await startStream();
+      if (!streamStarted) return;
+    }
+    // Stop tracking during calibration
+    setIsTracking(false);
+    startCalibration();
+  };
+
+  const handleCancelCalibration = () => {
+    cancelCalibration();
   };
 
   const handleWatchConnect = () => {
@@ -64,14 +146,19 @@ export default function Home() {
     return "#ef4444";
   };
 
-  const getFlowLabel = (value: number) => {
-    if (value >= 0.7) return "In Flow";
+  const getFlowLabel = (value: number, inFlow: boolean) => {
+    if (inFlow) return "In Flow";
+    if (value >= 0.65) return "Entering Flow...";
     if (value >= 0.5) return "Moderate Focus";
+    if (value >= 0.35) return "Light Focus";
     return "Distracted";
   };
 
   return (
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
+      {/* Calibration Overlay */}
+      <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} />
+
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
         Multi-sensor flow state detection using eye tracking + heart rate
@@ -120,7 +207,7 @@ export default function Home() {
           </div>
 
           {/* Camera Controls */}
-          <div style={{ marginTop: "1rem", display: "flex", gap: "1rem" }}>
+          <div style={{ marginTop: "1rem", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
             {!cameraState.stream ? (
               <button
                 onClick={handleStart}
@@ -154,7 +241,64 @@ export default function Home() {
                 Stop Tracking
               </button>
             )}
+
+            {/* Calibration Button */}
+            <button
+              onClick={handleCalibrate}
+              disabled={isCalibrating}
+              style={{
+                padding: "0.75rem 1.5rem",
+                fontSize: "1rem",
+                backgroundColor: hasCalibration ? "#374151" : "#8b5cf6",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                cursor: isCalibrating ? "wait" : "pointer",
+                opacity: isCalibrating ? 0.7 : 1,
+              }}
+            >
+              {hasCalibration ? "Recalibrate" : "Calibrate"}
+            </button>
           </div>
+
+          {/* Calibration Status */}
+          {hasCalibration && calibrationData && (
+            <div
+              style={{
+                marginTop: "0.75rem",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                fontSize: "0.75rem",
+                color: "#888",
+              }}
+            >
+              <span
+                style={{
+                  width: "8px",
+                  height: "8px",
+                  borderRadius: "50%",
+                  backgroundColor: "#22c55e",
+                }}
+              />
+              Calibrated {formatCalibrationDate(calibrationData)}
+              <button
+                onClick={clearStoredCalibration}
+                style={{
+                  marginLeft: "0.5rem",
+                  padding: "0.25rem 0.5rem",
+                  backgroundColor: "transparent",
+                  color: "#666",
+                  border: "1px solid #444",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontSize: "0.7rem",
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
 
           {cameraState.error && (
             <p style={{ color: "#ef4444", marginTop: "1rem" }}>{cameraState.error}</p>
@@ -274,12 +418,14 @@ export default function Home() {
                   padding: "1.5rem",
                   backgroundColor: "#1a1a1a",
                   borderRadius: "12px",
-                  border: "1px solid #333",
+                  border: flowState.inFlow ? "2px solid #22c55e" : "1px solid #333",
                   textAlign: "center",
+                  transition: "border-color 0.5s",
                 }}
               >
                 <div style={{ fontSize: "0.875rem", color: "#888", marginBottom: "0.5rem" }}>
                   {combinedMetrics.hasWatchData ? "Combined Flow State" : "Flow State (Eye Only)"}
+                  {hasCalibration && " • Calibrated"}
                 </div>
                 <div
                   style={{
@@ -297,9 +443,38 @@ export default function Home() {
                     marginTop: "0.25rem",
                   }}
                 >
-                  {getFlowLabel(combinedMetrics.combinedFlowScore)}
+                  {getFlowLabel(combinedMetrics.combinedFlowScore, flowState.inFlow)}
                 </div>
-                {!combinedMetrics.hasWatchData && (
+                {flowState.inFlow && (
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#22c55e",
+                      marginTop: "0.5rem",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        backgroundColor: "#22c55e",
+                        animation: "pulse 2s infinite",
+                      }}
+                    />
+                    Flow confirmed • {(flowState.confidence * 100).toFixed(0)}% confidence
+                  </div>
+                )}
+                {!flowState.inFlow && flowState.flowOnsetTime && (
+                  <div style={{ fontSize: "0.75rem", color: "#eab308", marginTop: "0.5rem" }}>
+                    Building focus... {Math.floor((Date.now() - flowState.flowOnsetTime) / 1000)}s
+                  </div>
+                )}
+                {!combinedMetrics.hasWatchData && !flowState.inFlow && (
                   <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.5rem" }}>
                     Connect watch for combined metrics
                   </div>
@@ -335,6 +510,32 @@ export default function Home() {
                   subtitle="Eye-only score"
                 />
               </div>
+
+              {/* Calibration Info */}
+              {hasCalibration && calibrationData && (
+                <div
+                  style={{
+                    padding: "0.75rem 1rem",
+                    backgroundColor: "#1a1a1a",
+                    borderRadius: "8px",
+                    border: "1px solid #333",
+                    fontSize: "0.75rem",
+                    color: "#888",
+                  }}
+                >
+                  <div style={{ marginBottom: "0.25rem", color: "#aaa" }}>
+                    Personal Thresholds
+                  </div>
+                  <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                    <span>Blink: {calibrationData.ear.blinkThreshold.toFixed(3)}</span>
+                    <span>Open EAR: {calibrationData.ear.openEyeEAR.toFixed(3)}</span>
+                    <span>
+                      Gaze Center: ({calibrationData.gaze.center.x.toFixed(2)},{" "}
+                      {calibrationData.gaze.center.y.toFixed(2)})
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* History Graph */}
               {metricsHistory.length > 1 && (
@@ -378,8 +579,10 @@ export default function Home() {
               }}
             >
               {trackingState.isRunning
-                ? "Calibrating... Look at the camera"
-                : "Start tracking to see metrics"}
+                ? "Measuring... Look at the camera"
+                : hasCalibration
+                ? "Start tracking to see metrics"
+                : "Calibrate first for accurate readings"}
             </div>
           )}
         </div>

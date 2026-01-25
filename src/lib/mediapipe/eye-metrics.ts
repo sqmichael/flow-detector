@@ -22,6 +22,7 @@ import {
   type EyeTrackingConfig,
   DEFAULT_EYE_TRACKING_CONFIG,
 } from "./types";
+import type { GazeCalibration } from "@/lib/calibration/types";
 
 // Debug logging configuration
 const DEBUG_CONFIG = {
@@ -288,9 +289,13 @@ export function calculateGaze(
  * normalized to a 0-1 scale where 1 = perfectly stable.
  *
  * @param gazeHistory - Array of recent gaze data samples
+ * @param calibration - Optional calibration data for personalized center
  * @returns Stability score (0-1)
  */
-export function calculateGazeStability(gazeHistory: GazeData[]): number {
+export function calculateGazeStability(
+  gazeHistory: GazeData[],
+  calibration?: GazeCalibration | null
+): number {
   if (gazeHistory.length < 2) return 0.5; // Neutral if insufficient data
 
   // Calculate variance in combined gaze direction
@@ -312,7 +317,17 @@ export function calculateGazeStability(gazeHistory: GazeData[]): number {
   // Lower variance = higher stability
   // Use exponential decay: stability = e^(-k * variance)
   // k chosen so variance of 0.1 gives stability of ~0.5
-  const k = 7;
+  // If calibration exists, adjust k based on personal variance
+  let k = 7;
+  if (calibration?.centerStdDev) {
+    // Normalize k based on personal baseline variance
+    // People with naturally higher variance need a higher k to get similar scores
+    const personalVariance = (calibration.centerStdDev.x + calibration.centerStdDev.y) / 2;
+    if (personalVariance > 0.01) {
+      // Scale k inversely with personal baseline variance
+      k = 7 / Math.max(personalVariance * 10, 0.5);
+    }
+  }
   const stability = Math.exp(-k * totalVariance);
 
   return Math.max(0, Math.min(1, stability));
@@ -388,13 +403,33 @@ export function updateBlinkState(
   );
 
   // Calculate blink rate (blinks per minute)
+  // Fix cold-start problem: don't extrapolate from tiny time windows
   if (newState.recentBlinks.length > 0) {
     const oldestBlink = newState.recentBlinks[0];
-    const timeSpanMs = Math.max(timestamp - oldestBlink.timestamp, 1000);
-    const timeSpanMinutes = timeSpanMs / 60000;
-    newState.blinkRate = newState.recentBlinks.length / timeSpanMinutes;
+    const timeSpanMs = timestamp - oldestBlink.timestamp;
+
+    // Minimum 30 seconds of data before calculating meaningful rate
+    // This prevents wild extrapolations like "1 blink in 5 seconds = 12/min"
+    const MIN_WINDOW_MS = 30000;
+
+    if (timeSpanMs >= MIN_WINDOW_MS) {
+      // We have enough data for a reliable rate
+      const timeSpanMinutes = timeSpanMs / 60000;
+      newState.blinkRate = newState.recentBlinks.length / timeSpanMinutes;
+    } else {
+      // Not enough data yet - use a conservative estimate
+      // Blend between observed rate and typical baseline (15/min)
+      // Weight toward baseline when we have less data
+      const dataWeight = timeSpanMs / MIN_WINDOW_MS;
+      const observedRate = timeSpanMs > 0
+        ? (newState.recentBlinks.length / timeSpanMs) * 60000
+        : 15;
+      const baselineRate = 15; // Typical human blink rate
+      newState.blinkRate = observedRate * dataWeight + baselineRate * (1 - dataWeight);
+    }
   } else {
-    newState.blinkRate = 0;
+    // No blinks yet - assume typical rate
+    newState.blinkRate = 15;
   }
 
   return newState;
@@ -502,6 +537,7 @@ export function calculateEyeFlowIndicator(
  * @param blinkRate - Current blink rate from blink state
  * @param windowStart - Start of aggregation window
  * @param windowEnd - End of aggregation window
+ * @param gazeCalibration - Optional gaze calibration for personalized stability
  * @returns Aggregated metrics for the window
  */
 export function aggregateMetrics(
@@ -509,7 +545,8 @@ export function aggregateMetrics(
   gazeHistory: GazeData[],
   blinkRate: number,
   windowStart: number,
-  windowEnd: number
+  windowEnd: number,
+  gazeCalibration?: GazeCalibration | null
 ): AggregatedEyeMetrics {
   if (frameHistory.length === 0) {
     return {
@@ -530,8 +567,8 @@ export function aggregateMetrics(
   );
   const averageEAR = totalEAR / frameHistory.length;
 
-  // Calculate gaze stability
-  const gazeStability = calculateGazeStability(gazeHistory);
+  // Calculate gaze stability (with optional calibration)
+  const gazeStability = calculateGazeStability(gazeHistory, gazeCalibration);
 
   // Calculate flow indicator
   const eyeFlowIndicator = calculateEyeFlowIndicator(blinkRate, gazeStability);
