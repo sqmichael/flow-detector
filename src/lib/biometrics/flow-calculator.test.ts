@@ -8,10 +8,11 @@
 import {
   calculateCalibratedEyeFlowScore,
   calculateHRVScore,
+  calculateEDAScore,
   updateFlowDetector,
   createFlowDetectorState,
+  calculateCombinedFlow,
 } from "./flow-calculator";
-import { calculateCombinedFlow } from "./flow-calculator";
 import type { AggregatedEyeMetrics } from "../mediapipe/types";
 import type { WorkingBaselineCalibration } from "../calibration/types";
 
@@ -290,6 +291,78 @@ test("HRV scoring without baseline uses absolute thresholds", () => {
   assertApprox(ok, 0.6, 0.01, "15ms should score 0.6");
   assertApprox(bad, 0.4, 0.01, "5ms should score 0.4");
   console.log(`   Good(40ms): ${good}, OK(15ms): ${ok}, Bad(5ms): ${bad}`);
+});
+
+// ── EDA Scoring Tests ──────────────────────────────────────────
+
+// Test baseline with EDA data
+const testBaselineWithEDA: WorkingBaselineCalibration = {
+  ...testBaselineWithHRV,
+  edaSclMean: 5.0,
+  edaSclStdDev: 1.5,
+  edaSampleCount: 25,
+};
+
+// Test 14: EDA scoring with baseline — at baseline scores highest
+test("EDA scoring: at personal baseline (z=0) scores highest", () => {
+  const atBaseline = calculateEDAScore(5.0, testBaselineWithEDA); // z = 0
+  const highArousal = calculateEDAScore(9.5, testBaselineWithEDA); // z = 3.0
+  const lowArousal = calculateEDAScore(0.5, testBaselineWithEDA); // z = -3.0
+
+  assert(atBaseline >= 0.95, `At baseline should score >= 0.95, got ${atBaseline.toFixed(3)}`);
+  assert(atBaseline > highArousal, `Baseline (${atBaseline.toFixed(3)}) > high arousal (${highArousal.toFixed(3)})`);
+  assert(atBaseline > lowArousal, `Baseline (${atBaseline.toFixed(3)}) > low arousal (${lowArousal.toFixed(3)})`);
+  console.log(`   At baseline(5.0): ${(atBaseline * 100).toFixed(0)}%, High(9.5): ${(highArousal * 100).toFixed(0)}%, Low(0.5): ${(lowArousal * 100).toFixed(0)}%`);
+});
+
+// Test 15: EDA scoring without baseline uses absolute thresholds
+test("EDA scoring: without baseline uses absolute thresholds", () => {
+  const moderate = calculateEDAScore(6.0, null); // in 2-10 range
+  const borderline = calculateEDAScore(12.0, null); // in 1-15 range but not 2-10
+  const extreme = calculateEDAScore(25.0, null); // outside all ranges
+
+  assertApprox(moderate, 0.8, 0.01, "6.0 µS should score 0.8");
+  assertApprox(borderline, 0.6, 0.01, "12.0 µS should score 0.6");
+  assertApprox(extreme, 0.4, 0.01, "25.0 µS should score 0.4");
+  console.log(`   Moderate(6.0): ${moderate}, Borderline(12.0): ${borderline}, Extreme(25.0): ${extreme}`);
+});
+
+// Test 16: Three-tier weight selection — eye+HRV+EDA uses different weights than eye+HRV
+test("Three-tier weights: EDA changes combined score", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+  const edaData = { scl: 5.0 }; // At baseline
+
+  const withEDA = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData);
+  const withoutEDA = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithHRV, null);
+  const eyeOnly = calculateCombinedFlow(metrics, null, 72, testBaseline, null);
+
+  assert(withEDA.hasEdaData === true, "Should have EDA data");
+  assert(withEDA.hasWatchData === true, "Should have watch data");
+  assert(withoutEDA.hasEdaData === false, "Should not have EDA data");
+  assert(withoutEDA.hasWatchData === true, "Should have watch data");
+  assert(eyeOnly.hasEdaData === false, "Eye-only should not have EDA");
+  assert(eyeOnly.hasWatchData === false, "Eye-only should not have watch data");
+
+  // All three should produce different scores due to different weights
+  assert(
+    Math.abs(withEDA.combinedFlowScore - withoutEDA.combinedFlowScore) > 0.001,
+    `EDA tier (${withEDA.combinedFlowScore.toFixed(3)}) should differ from HRV tier (${withoutEDA.combinedFlowScore.toFixed(3)})`
+  );
+  console.log(`   Eye+HRV+EDA: ${(withEDA.combinedFlowScore * 100).toFixed(0)}%, Eye+HRV: ${(withoutEDA.combinedFlowScore * 100).toFixed(0)}%, Eye-only: ${(eyeOnly.combinedFlowScore * 100).toFixed(0)}%`);
+});
+
+// Test 17: EDA SCL is passed through to combined metrics
+test("Combined flow includes SCL value when EDA data provided", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+
+  const withEDA = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, { scl: 7.5 });
+  const withoutEDA = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithHRV, null);
+
+  assert(withEDA.scl === 7.5, `SCL should be 7.5, got ${withEDA.scl}`);
+  assert(withoutEDA.scl === null, `SCL should be null without EDA, got ${withoutEDA.scl}`);
+  console.log(`   With EDA: scl=${withEDA.scl}, Without: scl=${withoutEDA.scl}`);
 });
 
 console.log("\n=== All tests complete ===\n");

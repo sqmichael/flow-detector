@@ -5,6 +5,7 @@ import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
 import { usePulsoid } from "@/hooks/use-pulsoid";
 import { useBleHrm } from "@/hooks/use-ble-hrm";
+import { useWatchStream } from "@/hooks/use-watch-stream";
 import { useCalibration } from "@/hooks/use-calibration";
 import {
   calculateCombinedFlow,
@@ -41,6 +42,17 @@ export default function Home() {
     disconnect: disconnectBle,
   } = useBleHrm();
 
+  // Galaxy Watch stream (HR + IBI + EDA via relay server)
+  const {
+    isRelayConnected,
+    isWatchConnected: watchStreamConnected,
+    watchDeviceName: watchStreamDeviceName,
+    heartRate: watchStreamHeartRate,
+    hrvMetrics: watchStreamHrvMetrics,
+    currentSCL,
+    error: watchStreamError,
+  } = useWatchStream();
+
   // Keep HRV metrics in a ref for the calibration getter (avoids stale closures)
   const hrvMetricsRef = useRef(hrvMetrics);
   hrvMetricsRef.current = hrvMetrics;
@@ -71,9 +83,18 @@ export default function Home() {
     disconnect: disconnectPulsoid,
   } = usePulsoid();
 
-  // Prefer BLE HRM over Pulsoid for heart rate and HRV
-  const effectiveHeartRate = bleConnected ? bleHeartRate : heartRate;
-  const effectiveHrvMetrics = bleConnected ? hrvMetrics : null;
+  // Data source priority: Watch Stream > BLE HRM > Pulsoid
+  const effectiveHeartRate = watchStreamConnected
+    ? watchStreamHeartRate
+    : bleConnected
+      ? bleHeartRate
+      : heartRate;
+  const effectiveHrvMetrics = watchStreamConnected
+    ? watchStreamHrvMetrics
+    : bleConnected
+      ? hrvMetrics
+      : null;
+  const effectiveEDA = watchStreamConnected ? currentSCL : null;
 
   // Callback to handle new metrics with EMA smoothing
   const handleMetrics = useCallback(
@@ -83,7 +104,8 @@ export default function Home() {
         m,
         effectiveHrvMetrics,
         effectiveHeartRate,
-        calibrationData?.workingBaseline ?? null
+        calibrationData?.workingBaseline ?? null,
+        effectiveEDA !== null ? { scl: effectiveEDA } : null
       );
 
       // Update flow detector with EMA smoothing
@@ -102,7 +124,7 @@ export default function Home() {
       };
       setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
     },
-    [effectiveHeartRate, effectiveHrvMetrics, calibrationData]
+    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData]
   );
 
   const { state: trackingState, metrics } = useEyeTracking({
@@ -119,14 +141,15 @@ export default function Home() {
       metrics,
       effectiveHrvMetrics,
       effectiveHeartRate,
-      calibrationData?.workingBaseline ?? null
+      calibrationData?.workingBaseline ?? null,
+      effectiveEDA !== null ? { scl: effectiveEDA } : null
     );
     // Use smoothed score from flow detector
     return {
       ...combined,
       combinedFlowScore: flowState.smoothedScore,
     };
-  }, [metrics, effectiveHeartRate, effectiveHrvMetrics, calibrationData, flowState.smoothedScore]);
+  }, [metrics, effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData, flowState.smoothedScore]);
 
   const handleStart = async () => {
     const streamStarted = await startStream();
@@ -330,10 +353,128 @@ export default function Home() {
             <p style={{ color: "#ef4444", marginTop: "0.5rem" }}>{trackingState.error}</p>
           )}
 
-          {/* Watch Connection Panel */}
+          {/* Watch Stream Panel (Galaxy Watch via relay server) */}
           <div
             style={{
               marginTop: "1.5rem",
+              padding: "1rem",
+              backgroundColor: "#1a1a1a",
+              borderRadius: "12px",
+              border: watchStreamConnected ? "1px solid #10b981" : "1px solid #333",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <span style={{ fontWeight: "bold" }}>Galaxy Watch (Direct)</span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  fontSize: "0.875rem",
+                  color: watchStreamConnected ? "#10b981" : "#888",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    backgroundColor: watchStreamConnected
+                      ? "#10b981"
+                      : isRelayConnected
+                        ? "#eab308"
+                        : "#666",
+                  }}
+                />
+                {watchStreamConnected
+                  ? watchStreamDeviceName ?? "Watch Connected"
+                  : isRelayConnected
+                    ? "Relay connected, waiting for watch..."
+                    : "Relay offline"}
+              </span>
+            </div>
+
+            <div style={{ fontSize: "0.75rem", color: "#666" }}>
+              {isRelayConnected
+                ? "Relay server running. Start watch app to stream HR + EDA."
+                : "Run: npm run watch-server"}
+            </div>
+
+            {watchStreamError && (
+              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                {watchStreamError}
+              </p>
+            )}
+
+            {/* Watch Stream Metrics */}
+            {watchStreamConnected && (
+              <div
+                style={{
+                  marginTop: "1rem",
+                  display: "grid",
+                  gridTemplateColumns: currentSCL !== null ? "1fr 1fr 1fr" : "1fr 1fr",
+                  gap: "0.5rem",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
+                    {watchStreamHeartRate ?? "--"}
+                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> BPM</span>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>RMSSD</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#10b981" }}>
+                    {watchStreamHrvMetrics?.rmssd?.toFixed(0) ?? "--"}
+                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> ms</span>
+                  </div>
+                </div>
+                {currentSCL !== null && (
+                  <div
+                    style={{
+                      padding: "0.75rem",
+                      backgroundColor: "#0a0a0a",
+                      borderRadius: "8px",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.75rem", color: "#888" }}>SCL</div>
+                    <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#f59e0b" }}>
+                      {currentSCL.toFixed(1)}
+                      <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> {"\u00B5S"}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Pulsoid Connection Panel (fallback) */}
+          <div
+            style={{
+              marginTop: "1rem",
               padding: "1rem",
               backgroundColor: "#1a1a1a",
               borderRadius: "12px",
@@ -348,7 +489,7 @@ export default function Home() {
                 marginBottom: "0.75rem",
               }}
             >
-              <span style={{ fontWeight: "bold" }}>Galaxy Watch (Pulsoid)</span>
+              <span style={{ fontWeight: "bold" }}>Pulsoid (Fallback)</span>
               <span
                 style={{
                   display: "inline-flex",
@@ -410,7 +551,7 @@ export default function Home() {
               </p>
             )}
 
-            {/* Watch Metrics */}
+            {/* Pulsoid Metrics */}
             {watchConnected && (
               <div
                 style={{
@@ -575,7 +716,11 @@ export default function Home() {
                 }}
               >
                 <div style={{ fontSize: "0.875rem", color: "#888", marginBottom: "0.5rem" }}>
-                  {combinedMetrics.hasWatchData ? "Combined Flow State (Eye + HRV)" : "Flow State (Eye Only)"}
+                  {combinedMetrics.hasEdaData
+                    ? "Combined Flow State (Eye + HRV + EDA)"
+                    : combinedMetrics.hasWatchData
+                      ? "Combined Flow State (Eye + HRV)"
+                      : "Flow State (Eye Only)"}
                   {hasCalibration && " • Calibrated"}
                 </div>
                 <div
@@ -672,6 +817,13 @@ export default function Home() {
                     label="SDNN"
                     value={`${combinedMetrics.sdnn.toFixed(0)}ms`}
                     subtitle="HRV variability"
+                  />
+                )}
+                {combinedMetrics.scl !== null && (
+                  <MetricCard
+                    label="SCL"
+                    value={`${combinedMetrics.scl.toFixed(1)} \u00B5S`}
+                    subtitle="Skin conductance"
                   />
                 )}
               </div>

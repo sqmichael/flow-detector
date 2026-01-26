@@ -1,11 +1,60 @@
 /**
  * Biometrics Type Definitions
  *
- * Types for heart rate, HRV, and combined flow metrics
- * from Samsung Galaxy Watch via SensorServer.
+ * Types for heart rate, HRV, EDA, and combined flow metrics
+ * from Samsung Galaxy Watch via WebSocket relay.
  */
 
 import type { AggregatedEyeMetrics } from "../mediapipe/types";
+
+// ── Watch Message Protocol ──────────────────────────────────────────
+
+/**
+ * Handshake sent once by the watch on WebSocket connect
+ */
+export interface WatchHandshake {
+  type: "handshake";
+  protocolVersion: number;
+  deviceName: string;
+  sensors: string[];
+  timestamp: number;
+}
+
+/**
+ * Heart rate + IBI at 1 Hz from watch
+ */
+export interface WatchHeartRate {
+  type: "hr";
+  bpm: number;
+  ibi: number | null;
+  quality: number;
+  timestamp: number;
+}
+
+/**
+ * Electrodermal activity at 1 Hz from watch
+ * SCL = skin conductance level in microsiemens
+ */
+export interface WatchEDA {
+  type: "eda";
+  scl: number;
+  timestamp: number;
+}
+
+/**
+ * Watch connection status (relay server → browser only)
+ */
+export interface WatchStatus {
+  type: "watch_status";
+  connected: boolean;
+  deviceName: string | null;
+  timestamp: number;
+}
+
+/**
+ * Union of all messages the browser can receive from the relay server
+ */
+export type WatchMessage = WatchHandshake | WatchHeartRate | WatchEDA | WatchStatus;
 
 /**
  * Heart rate data from the watch
@@ -81,11 +130,17 @@ export interface CombinedFlowMetrics {
   /** SDNN in milliseconds */
   sdnn: number | null;
 
+  // EDA metrics (null if watch not connected or no EDA sensor)
+  /** Skin conductance level in microsiemens */
+  scl: number | null;
+
   // Combined metrics
   /** Combined flow score (0-1) incorporating all sensors */
   combinedFlowScore: number;
-  /** Whether watch data is included in the score */
+  /** Whether watch data (HR/HRV) is included in the score */
   hasWatchData: boolean;
+  /** Whether EDA data is included in the score */
+  hasEdaData: boolean;
 
   /** Unix timestamp in milliseconds */
   timestamp: number;

@@ -8,7 +8,7 @@
 import type { CalibrationData } from "./types";
 
 const CALIBRATION_STORAGE_KEY = "flow-detector-calibration";
-const CALIBRATION_VERSION = 2;
+const CALIBRATION_VERSION = 3;
 
 /**
  * Save calibration data to localStorage

@@ -1,13 +1,14 @@
 /**
  * Combined Flow Calculator
  *
- * Calculates a combined flow score from eye tracking and HRV metrics
+ * Calculates a combined flow score from eye tracking, HRV, and EDA metrics
  * using z-score normalization against personal baselines.
  *
  * Research shows flow is characterized by:
  * - Blink rate BELOW personal baseline (visual absorption)
  * - Gaze stability ABOVE personal baseline (focused attention)
  * - HRV in moderate range (engaged but calm)
+ * - EDA at or near personal baseline (moderate arousal, inverse-U)
  *
  * Uses Gaussian scoring curves for smooth transitions instead of step functions.
  */
@@ -224,6 +225,42 @@ export function calculateHRVScore(
 }
 
 /**
+ * EDA scoring Gaussian width — tunable as real-world data is collected.
+ * Width 1.0 means ~68% of score within 1 stdDev of baseline.
+ */
+const EDA_SCORE_GAUSSIAN_WIDTH = 1.0;
+
+/**
+ * Calculate EDA (skin conductance) flow component
+ *
+ * Skin conductance shows an inverse-U relationship with flow:
+ * moderate arousal (near baseline) = flow, low = boredom, high = anxiety.
+ * Gaussian centered at z=0 (personal working baseline).
+ */
+export function calculateEDAScore(
+  scl: number,
+  baseline: WorkingBaselineCalibration | null
+): number {
+  if (!baseline?.edaSclMean || !baseline?.edaSclStdDev) {
+    // No EDA baseline — use absolute thresholds
+    // Typical resting SCL: 1-20 µS, moderate arousal zone: 2-10 µS
+    if (scl >= 2 && scl <= 10) return 0.8;
+    if (scl >= 1 && scl <= 15) return 0.6;
+    return 0.4;
+  }
+
+  const z = zScore(scl, baseline.edaSclMean, baseline.edaSclStdDev);
+
+  // Flow target: z = 0 (at personal working baseline)
+  // Inverse-U: baseline-level arousal is optimal
+  const score = gaussianScore(z, 0, EDA_SCORE_GAUSSIAN_WIDTH);
+
+  log(`EDA: SCL=${scl.toFixed(2)} µS, z=${z.toFixed(2)}, score=${score.toFixed(3)}`);
+
+  return score;
+}
+
+/**
  * Calculate eye-based flow score using calibrated baselines
  *
  * Combines blink rate, gaze stability, and EAR scores
@@ -308,24 +345,39 @@ export function calculateCombinedFlow(
   eyeMetrics: AggregatedEyeMetrics,
   hrvMetrics: HRVMetrics | null,
   heartRate: number | null,
-  workingBaseline: WorkingBaselineCalibration | null = null
+  workingBaseline: WorkingBaselineCalibration | null = null,
+  edaData: { scl: number } | null = null
 ): CombinedFlowMetrics {
   const timestamp = Date.now();
   const hasWatchData = hrvMetrics !== null;
+  const hasEdaData = edaData !== null;
 
   // Calculate calibrated eye flow score
   const calibratedEyeScore = calculateCalibratedEyeFlowScore(eyeMetrics, workingBaseline);
 
   let combinedFlowScore: number;
 
-  if (hasWatchData && hrvMetrics) {
-    // Combined mode: eye metrics + HRV with adjusted weights
-    const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
+  // Recalculate individual eye component scores (needed for weighted modes)
+  const blinkScore = calculateBlinkRateScore(eyeMetrics.blinkRate, workingBaseline);
+  const gazeScore = calculateGazeStabilityScore(eyeMetrics.gazeStability, workingBaseline);
+  const earScore = calculateEARScore(eyeMetrics.averageEAR, workingBaseline);
 
-    // Recalculate individual eye component scores with adjusted weights
-    const blinkScore = calculateBlinkRateScore(eyeMetrics.blinkRate, workingBaseline);
-    const gazeScore = calculateGazeStabilityScore(eyeMetrics.gazeStability, workingBaseline);
-    const earScore = calculateEARScore(eyeMetrics.averageEAR, workingBaseline);
+  if (hasWatchData && hrvMetrics && hasEdaData && edaData) {
+    // Three-tier: Eye + HRV + EDA
+    const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
+    const edaScore = calculateEDAScore(edaData.scl, workingBaseline);
+
+    combinedFlowScore =
+      blinkScore * 0.25 +
+      gazeScore * 0.30 +
+      earScore * 0.10 +
+      hrvScore * 0.20 +
+      edaScore * 0.15;
+
+    log(`Combined flow (Eye+HRV+EDA): blink(${blinkScore.toFixed(3)})*0.25 + gaze(${gazeScore.toFixed(3)})*0.30 + ear(${earScore.toFixed(3)})*0.10 + hrv(${hrvScore.toFixed(3)})*0.20 + eda(${edaScore.toFixed(3)})*0.15 = ${combinedFlowScore.toFixed(3)}`);
+  } else if (hasWatchData && hrvMetrics) {
+    // Two-tier: Eye + HRV (no EDA)
+    const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
 
     combinedFlowScore =
       blinkScore * 0.30 +
@@ -333,7 +385,7 @@ export function calculateCombinedFlow(
       earScore * 0.10 +
       hrvScore * 0.25;
 
-    log(`Combined flow: blink(${blinkScore.toFixed(3)})*0.30 + gaze(${gazeScore.toFixed(3)})*0.35 + ear(${earScore.toFixed(3)})*0.10 + hrv(${hrvScore.toFixed(3)})*0.25 = ${combinedFlowScore.toFixed(3)}`);
+    log(`Combined flow (Eye+HRV): blink(${blinkScore.toFixed(3)})*0.30 + gaze(${gazeScore.toFixed(3)})*0.35 + ear(${earScore.toFixed(3)})*0.10 + hrv(${hrvScore.toFixed(3)})*0.25 = ${combinedFlowScore.toFixed(3)}`);
   } else {
     // Eye-only mode — unchanged weights (0.40, 0.45, 0.15)
     combinedFlowScore = calibratedEyeScore;
@@ -349,16 +401,20 @@ export function calculateCombinedFlow(
     blinkRate: eyeMetrics.blinkRate,
     gazeStability: eyeMetrics.gazeStability,
     averageEAR: eyeMetrics.averageEAR,
-    eyeFlowIndicator: calibratedEyeScore, // Now uses calibrated score
+    eyeFlowIndicator: calibratedEyeScore,
 
     // HRV metrics
     heartRate,
     rmssd: hrvMetrics?.rmssd ?? null,
     sdnn: hrvMetrics?.sdnn ?? null,
 
+    // EDA metrics
+    scl: edaData?.scl ?? null,
+
     // Combined
     combinedFlowScore,
     hasWatchData,
+    hasEdaData,
     timestamp,
   };
 }
