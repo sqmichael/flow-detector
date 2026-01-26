@@ -79,6 +79,10 @@ export function parseHeartRateMeasurement(dataView: DataView): {
 const HEART_RATE_SERVICE = "heart_rate";
 const HEART_RATE_MEASUREMENT = "heart_rate_measurement";
 
+// If no RR intervals received for this long, null out HRV metrics
+// so flow calculator falls back to eye-only mode
+const HRV_STALENESS_TIMEOUT_MS = 10_000;
+
 export function useBleHrm(): UseBleHrmReturn {
   const [state, setState] = useState<BleHrmState>({
     isConnected: false,
@@ -93,6 +97,7 @@ export function useBleHrm(): UseBleHrmReturn {
   const deviceRef = useRef<BluetoothDevice | null>(null);
   const characteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const hrvCalculatorRef = useRef<HRVCalculator>(new HRVCalculator());
+  const lastRRTimestampRef = useRef<number>(0);
 
   // Handle BLE notifications
   const handleNotification = useCallback((event: Event) => {
@@ -110,14 +115,27 @@ export function useBleHrm(): UseBleHrmReturn {
       latestIBI = rr;
     }
 
+    // Track when we last received RR data
+    if (rrIntervals.length > 0) {
+      lastRRTimestampRef.current = timestamp;
+    }
+
     // Calculate HRV metrics (returns null if insufficient samples)
     const hrvMetrics = hrvCalculatorRef.current.calculate();
+
+    // Clear stale HRV data when no RR intervals received recently.
+    // Without this, packets with HR-only (no RR flag, poor contact) would
+    // preserve the last hrvMetrics indefinitely via the nullish coalesce,
+    // causing calculateCombinedFlow to use outdated HRV weights.
+    const rrIsStale =
+      lastRRTimestampRef.current > 0 &&
+      timestamp - lastRRTimestampRef.current > HRV_STALENESS_TIMEOUT_MS;
 
     setState((prev) => ({
       ...prev,
       heartRate,
       latestIBI: latestIBI ?? prev.latestIBI,
-      hrvMetrics: hrvMetrics ?? prev.hrvMetrics,
+      hrvMetrics: rrIsStale ? null : (hrvMetrics ?? prev.hrvMetrics),
     }));
   }, []);
 
@@ -178,8 +196,9 @@ export function useBleHrm(): UseBleHrmReturn {
       characteristic.addEventListener("characteristicvaluechanged", handleNotification);
       await characteristic.startNotifications();
 
-      // Reset HRV calculator for fresh session
+      // Reset HRV calculator and staleness tracking for fresh session
       hrvCalculatorRef.current.reset();
+      lastRRTimestampRef.current = 0;
 
       setState((prev) => ({
         ...prev,
@@ -231,6 +250,7 @@ export function useBleHrm(): UseBleHrmReturn {
     }
 
     hrvCalculatorRef.current.reset();
+    lastRRTimestampRef.current = 0;
 
     setState({
       isConnected: false,
