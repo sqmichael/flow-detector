@@ -194,6 +194,36 @@ function calculateEARScore(
 }
 
 /**
+ * Calculate HRV (RMSSD) flow component
+ *
+ * During flow, RMSSD tends to be in a moderate "Goldilocks zone" —
+ * not too low (stress/anxiety) and not too high (deep relaxation/drowsiness).
+ * Optimal is slightly below personal baseline (engaged but calm).
+ */
+export function calculateHRVScore(
+  rmssd: number,
+  baseline: WorkingBaselineCalibration | null
+): number {
+  if (!baseline?.hrvRmssdMean || !baseline?.hrvRmssdStdDev) {
+    // No HRV baseline — use absolute thresholds
+    // Typical resting RMSSD: 20-80ms, flow zone: ~30-60ms
+    if (rmssd >= 25 && rmssd <= 70) return 0.8;
+    if (rmssd >= 15 && rmssd <= 90) return 0.6;
+    return 0.4;
+  }
+
+  const z = zScore(rmssd, baseline.hrvRmssdMean, baseline.hrvRmssdStdDev);
+
+  // Flow target: z = -0.5 (slightly below baseline, engaged but not stressed)
+  // Gaussian centered at -0.5 with width 1.2 (fairly broad — HRV is noisy)
+  const score = gaussianScore(z, -0.5, 1.2);
+
+  log(`HRV: RMSSD=${rmssd.toFixed(1)}ms, z=${z.toFixed(2)}, score=${score.toFixed(3)}`);
+
+  return score;
+}
+
+/**
  * Calculate eye-based flow score using calibrated baselines
  *
  * Combines blink rate, gaze stability, and EAR scores
@@ -289,17 +319,23 @@ export function calculateCombinedFlow(
   let combinedFlowScore: number;
 
   if (hasWatchData && hrvMetrics) {
-    // TODO: Add HRV scoring when watch provides IBI data
-    // For now, just use eye metrics with slight weight adjustment
-    const hrvComponent = 0; // Placeholder until we have proper HRV
-    const eyeComponent = calibratedEyeScore;
+    // Combined mode: eye metrics + HRV with adjusted weights
+    const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
 
-    // When watch connected but no HRV, still use eye metrics
-    combinedFlowScore = eyeComponent;
+    // Recalculate individual eye component scores with adjusted weights
+    const blinkScore = calculateBlinkRateScore(eyeMetrics.blinkRate, workingBaseline);
+    const gazeScore = calculateGazeStabilityScore(eyeMetrics.gazeStability, workingBaseline);
+    const earScore = calculateEARScore(eyeMetrics.averageEAR, workingBaseline);
 
-    log(`Combined flow: HRV(${hrvComponent.toFixed(3)}) + Eye(${eyeComponent.toFixed(3)}) = ${combinedFlowScore.toFixed(3)}`);
+    combinedFlowScore =
+      blinkScore * 0.30 +
+      gazeScore * 0.35 +
+      earScore * 0.10 +
+      hrvScore * 0.25;
+
+    log(`Combined flow: blink(${blinkScore.toFixed(3)})*0.30 + gaze(${gazeScore.toFixed(3)})*0.35 + ear(${earScore.toFixed(3)})*0.10 + hrv(${hrvScore.toFixed(3)})*0.25 = ${combinedFlowScore.toFixed(3)}`);
   } else {
-    // Eye-only mode
+    // Eye-only mode — unchanged weights (0.40, 0.45, 0.15)
     combinedFlowScore = calibratedEyeScore;
 
     log(`Eye-only flow: ${combinedFlowScore.toFixed(3)}`);

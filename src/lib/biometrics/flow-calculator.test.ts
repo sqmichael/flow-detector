@@ -7,9 +7,11 @@
 
 import {
   calculateCalibratedEyeFlowScore,
+  calculateHRVScore,
   updateFlowDetector,
   createFlowDetectorState,
 } from "./flow-calculator";
+import { calculateCombinedFlow } from "./flow-calculator";
 import type { AggregatedEyeMetrics } from "../mediapipe/types";
 import type { WorkingBaselineCalibration } from "../calibration/types";
 
@@ -234,6 +236,60 @@ test("Score ranges across different states", () => {
 
   // 3. Very distracted should be lowest
   assert(scores[4] <= 0.4, "Very distracted should be low");
+});
+
+// Test baseline with HRV data
+const testBaselineWithHRV: WorkingBaselineCalibration = {
+  ...testBaseline,
+  hrvRmssdMean: 45,
+  hrvRmssdStdDev: 10,
+  hrvSampleCount: 5,
+};
+
+// Test 11: HRV scoring with calibrated baseline
+test("HRV scoring: optimal RMSSD (z=-0.5) scores highest", () => {
+  // z = -0.5 → RMSSD = 45 - 0.5*10 = 40ms (at Gaussian peak)
+  const optimal = calculateHRVScore(40, testBaselineWithHRV);
+
+  // High stress: RMSSD = 10ms → z = -3.5
+  const stressed = calculateHRVScore(10, testBaselineWithHRV);
+
+  // Drowsy: RMSSD = 80ms → z = 3.5
+  const drowsy = calculateHRVScore(80, testBaselineWithHRV);
+
+  assert(optimal > stressed, `Optimal (${optimal.toFixed(3)}) should score > stressed (${stressed.toFixed(3)})`);
+  assert(optimal > drowsy, `Optimal (${optimal.toFixed(3)}) should score > drowsy (${drowsy.toFixed(3)})`);
+  assert(optimal >= 0.9, `Optimal should be >= 0.9, got ${optimal.toFixed(3)}`);
+  console.log(`   Optimal(40ms): ${(optimal * 100).toFixed(0)}%, Stressed(10ms): ${(stressed * 100).toFixed(0)}%, Drowsy(80ms): ${(drowsy * 100).toFixed(0)}%`);
+});
+
+// Test 12: Combined flow with HRV vs eye-only
+test("Combined flow with HRV produces different score than eye-only", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+
+  const withHRV = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithHRV);
+  const eyeOnly = calculateCombinedFlow(metrics, null, 72, testBaseline);
+
+  assert(withHRV.hasWatchData === true, "Should have watch data when HRV present");
+  assert(eyeOnly.hasWatchData === false, "Should not have watch data when HRV null");
+  assert(
+    Math.abs(withHRV.combinedFlowScore - eyeOnly.combinedFlowScore) > 0.01,
+    `Scores should differ: HRV=${withHRV.combinedFlowScore.toFixed(3)}, eye=${eyeOnly.combinedFlowScore.toFixed(3)}`
+  );
+  console.log(`   With HRV: ${(withHRV.combinedFlowScore * 100).toFixed(0)}%, Eye-only: ${(eyeOnly.combinedFlowScore * 100).toFixed(0)}%`);
+});
+
+// Test 13: HRV scoring without baseline uses absolute thresholds
+test("HRV scoring without baseline uses absolute thresholds", () => {
+  const good = calculateHRVScore(40, null); // 25-70ms range
+  const ok = calculateHRVScore(15, null);   // 15-90ms range
+  const bad = calculateHRVScore(5, null);   // outside both ranges
+
+  assertApprox(good, 0.8, 0.01, "40ms should score 0.8");
+  assertApprox(ok, 0.6, 0.01, "15ms should score 0.6");
+  assertApprox(bad, 0.4, 0.01, "5ms should score 0.4");
+  console.log(`   Good(40ms): ${good}, OK(15ms): ${ok}, Bad(5ms): ${bad}`);
 });
 
 console.log("\n=== All tests complete ===\n");

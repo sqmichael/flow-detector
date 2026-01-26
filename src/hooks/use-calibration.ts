@@ -42,6 +42,8 @@ export interface UseCalibrationOptions {
   onComplete?: (data: CalibrationData) => void;
   /** Callback when calibration fails */
   onError?: (error: string) => void;
+  /** Optional: getter for current HRV metrics from BLE HRM, sampled during working baseline */
+  getHrvMetrics?: () => import("@/lib/biometrics/types").HRVMetrics | null;
 }
 
 export interface UseCalibrationReturn {
@@ -69,6 +71,7 @@ export function useCalibration({
   videoElement,
   onComplete,
   onError,
+  getHrvMetrics,
 }: UseCalibrationOptions): UseCalibrationReturn {
   const [state, setState] = useState<CalibrationState>(
     createInitialCalibrationState()
@@ -323,11 +326,13 @@ export function useCalibration({
               workingEARHistoryRef.current.length
             : 0.28;
 
+        const currentHrv = getHrvMetrics?.();
         const window: WorkingBaselineWindow = {
           blinkRate: workingBlinkStateRef.current.blinkRate,
           gazeStability,
           averageEAR,
           timestamp,
+          ...(currentHrv?.rmssd ? { rmssd: currentHrv.rmssd } : {}),
         };
 
         workingWindowsRef.current.push(window);
