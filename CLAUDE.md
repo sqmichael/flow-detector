@@ -7,19 +7,19 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV from
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Galaxy Watch 7 │     │   Mudra Link    │     │ MacBook Webcam  │
+│  Galaxy Watch 8 │     │   Mudra Link    │     │ MacBook Webcam  │
 │   (HR / HRV)    │     │ (Neural/SNC)    │     │  (Eye Tracking) │
 └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
          │ WebSocket             │ WebSocket             │ Local
-         │ (SensorServer)        │ (Custom Relay)        │ (MediaPipe)
+         │ (Custom App)          │ (Custom Relay)        │ (MediaPipe)
          └───────────────────────┼───────────────────────┘
                                  ▼
                     ┌────────────────────────┐
                     │     Fusion Hub         │
-                    │  (React + Socket.io)   │
+                    │  (Next.js + WebSocket) │
                     │                        │
-                    │  Flow = (HRV × Rhythm) │
-                    │         - Blinks       │
+                    │  Z-score flow scoring  │
+                    │  + EMA smoothing       │
                     └───────────┬────────────┘
                                 │
                                 ▼
@@ -29,50 +29,55 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV from
                     └────────────────────────┘
 ```
 
-## 14-Day Roadmap
-
-| Phase | Days | Goal | Status |
-|-------|------|------|--------|
-| **Plumbing** | 1-3 | SensorServer on Flip → Watch HR visible on localhost:3000 | |
-| **Neural/Vision** | 4-7 | Mudra relay + MediaPipe in React frontend | |
-| **Logic** | 8-11 | Flow Formula: `Flow = (HRV × Rhythm) - Blinks` | |
-| **Shield** | 12-14 | node-applescript triggers Mac Focus Mode on Flow detection | |
-
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Plumbing (Phase 1) - **MOSTLY COMPLETE**
+Phase: Logic (Phase 3) - **EYE TRACKING COMPLETE, CARDIAC NEXT**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
-- ✅ Heart rate streaming via Pulsoid WebSocket
-- ✅ Flow calculator (eye-only mode, since Pulsoid doesn't provide IBI)
-- ✅ Combined UI showing all metrics
+- ✅ Heart rate streaming via Pulsoid WebSocket (HR only, no IBI)
+- ✅ 4-step calibration with personal working baseline
+- ✅ Z-score flow algorithm with Gaussian/sigmoid scoring curves
+- ✅ EMA temporal smoothing (alpha=0.15) to prevent score flickering
+- ✅ Flow confirmation requiring 2+ minutes sustained above threshold
+- ✅ Blink rate cold-start fix (blends with baseline for first 30 seconds)
+- ✅ Algorithm test suite (10 tests, all passing)
 
-### Priority 1: MediaPipe Calibration (DO THIS FIRST)
-The eye tracking metrics are currently unreliable because they use hardcoded thresholds. Before adding more sensors, fix the foundation.
+### What's Next: Custom Watch App for IBI/HRV
+Pulsoid only provides HR, not IBI data needed for HRV calculation. Need a custom Galaxy Watch 8 app to stream both HR and IBI over WebSocket.
 
-**Problems with current implementation:**
-- EAR (Eye Aspect Ratio) baseline varies per person based on eye shape
-- Gaze "center" is wherever you happened to look when tracking started
-- Blink detection threshold (0.2) may be too sensitive or not sensitive enough
-- Flow score from uncalibrated data is essentially noise
+**Required cardiac data:** IBI (Inter-Beat Interval) in milliseconds — the time between consecutive heartbeats. From IBI, we calculate RMSSD (root mean square of successive differences) for HRV. The HRV calculator (`src/lib/biometrics/hrv-calculator.ts`) and sensor server hook (`src/hooks/use-sensor-server.ts`) are already built and waiting for data.
 
-**Calibration flow to implement:**
-1. "Look straight at camera" → capture gaze center baseline
-2. "Blink 5 times" → capture personal EAR range (open vs closed)
-3. "Look at corners" → capture gaze range for stability calculation
-4. Store calibration data in localStorage
-5. Use personal baselines instead of hardcoded values
+### After That: Focus Mode Shield
+Once cardiac data is integrated, wire up flow detection to trigger Mac Focus Mode via node-applescript when sustained flow is detected.
 
-**Files to modify:**
-- `src/hooks/use-eye-tracking.ts` - add calibration state and logic
-- `src/lib/mediapipe/metrics-calculator.ts` - use calibrated values
-- `src/app/page.tsx` - add calibration UI/flow
+## Calibration System
 
-### Priority 2: Custom Watch App for IBI/HRV
-The webapp is functional but Pulsoid only provides HR, not IBI data needed for proper HRV calculation. Need a custom Galaxy Watch 8 app to stream both HR and IBI.
+4-step guided calibration captures personal baselines:
 
-### Custom Watch App Spec (for Gemini/Codex)
+1. **Baseline (3s)** — Look at camera → captures open-eye EAR
+2. **Blink (5x)** — Blink naturally → captures closed-eye EAR and blink timing
+3. **Gaze Center (3s)** — Look at dot → captures personal gaze center
+4. **Working Baseline (30s)** — Read text naturally → captures personal blink rate, gaze stability, and EAR distributions (mean + stdDev) across 5-second windows
+
+Calibration data persists in localStorage (version 2). Old v1 data is auto-cleared.
+
+## Flow Detection Algorithm
+
+The algorithm uses **z-score normalization** against personal baselines captured during calibration.
+
+**Scoring functions:**
+- **Blink rate** — Gaussian curve centered at z=-1.5 (optimal is ~1.5 std deviations below your normal rate). Very low blink rates score slightly lower to account for strain.
+- **Gaze stability** — Sigmoid curve where higher stability = higher score. "More is better" without a peak.
+- **EAR** — Gaussian curve centered at z=-0.5 (slightly more open than baseline = alert engagement).
+
+**Weights:** Gaze stability 0.45, Blink rate 0.40, EAR 0.15
+
+**Temporal smoothing:** EMA with alpha=0.15 prevents raw score volatility from causing UI flickering.
+
+**Flow confirmation:** Score must stay above 0.65 for 2+ minutes before `inFlow` flag is set. Confidence builds over time. Dropping below threshold resets the onset timer.
+
+## Custom Watch App Spec (for Gemini/Codex)
 ```
 Platform: Wear OS 4+ (Galaxy Watch 8)
 Language: Kotlin
@@ -107,7 +112,7 @@ Galaxy Watch 8 (Custom App) → WebSocket Client → MacBook (this app)
 MacBook WebSocket Server: ws://macbook-ip:8080
 ```
 
-Note: The watch app is a WebSocket CLIENT that connects to a server on the MacBook. We'll need to add a simple WebSocket server to this Next.js app, or run a standalone Node server.
+The watch app is a WebSocket CLIENT that connects to a server on the MacBook. We'll need to add a simple WebSocket server to this Next.js app, or run a standalone Node server.
 
 ## Key Data Sources
 
@@ -117,58 +122,57 @@ Note: The watch app is a WebSocket CLIENT that connects to a server on the MacBo
 - **Data**: Heart Rate + IBI (Inter-Beat Interval) for HRV
 - **Why Custom**: Pulsoid/SensorServer don't expose IBI data
 
-### 2. Mudra Link (Neural)
+### 2. Mudra Link (Neural - LOW PRIORITY)
 - **Repo**: Mudra Android App Example
 - **Interface**: MudraDelegate
 - **Data**: Surface Neural Conductance (SNC) for intent detection
 - **Method**: Add WebSocket.send() to forward data to MacBook
 
-### 3. MacBook Webcam (Eye Tracking)
+### 3. MacBook Webcam (Eye Tracking - COMPLETE)
 - **Tool**: MediaPipe Face Landmarker (WASM)
 - **Data**: 478 3D face landmarks
-- **Key Landmarks**: 159 (Upper Eyelid), 145 (Lower Eyelid)
-- **Metric**: Eye Aspect Ratio → Blink Rate
-
-### 4. Fusion Hub
-- **Stack**: React + Socket.io (Node.js)
-- **Role**: Traffic controller for all sensor streams
-- **Output**: Flow Score + Focus Mode trigger
-
-## Flow Formula
-```
-Flow = (HRV × Rhythm) - Blinks
-```
-- **HRV**: Heart Rate Variability from watch IBI data
-- **Rhythm**: Derived from neural SNC patterns (Mudra)
-- **Blinks**: Blink rate from eye tracking (MediaPipe)
+- **Metrics**: Blink rate, gaze stability, EAR
+- **Calibration**: Personal baselines via 4-step guided flow
 
 ## Coding Rules
 
 1. **TypeScript only** - All code must be typed
 2. **Keep functions small** - Single responsibility
-3. **WebSocket consistency** - Use Socket.io for all real-time streams
-4. **No over-engineering** - Build only what's needed for the current phase
-5. **Test data flows** - Verify each sensor connection before moving on
+3. **No over-engineering** - Build only what's needed for the current phase
+4. **Test data flows** - Verify each sensor connection before moving on
+5. **Run tests** - `npx tsx src/lib/biometrics/flow-calculator.test.ts`
 
 ## File Structure
 
 ```
 src/
+├── app/
+│   ├── layout.tsx              ✅ Root layout
+│   └── page.tsx                ✅ Main dashboard with flow metrics UI
 ├── hooks/
 │   ├── use-camera-stream.ts    ✅ Camera permission & MediaStream
-│   ├── use-eye-tracking.ts     ✅ MediaPipe face landmarks → blink/gaze
+│   ├── use-eye-tracking.ts     ✅ MediaPipe face landmarks → blink/gaze (accepts calibration)
+│   ├── use-calibration.ts      ✅ 4-step calibration state machine
 │   ├── use-pulsoid.ts          ✅ Pulsoid WebSocket (HR only, no IBI)
 │   ├── use-sensor-server.ts    ✅ Ready for custom watch app (HR + IBI)
-│   └── use-mudra-stream.ts     TODO (Phase 2)
+│   └── use-mudra-stream.ts     TODO (low priority)
 ├── lib/
-│   ├── mediapipe/              ✅ Face Landmarker wrapper
-│   ├── biometrics/             ✅
-│   │   ├── types.ts            # HR/HRV/Combined types
-│   │   ├── hrv-calculator.ts   # RMSSD/SDNN from IBI data
-│   │   └── flow-calculator.ts  # Combined flow scoring
-│   └── flow-calculator/        TODO (Phase 3)
+│   ├── mediapipe/
+│   │   ├── types.ts            ✅ Eye tracking type definitions
+│   │   ├── face-landmarker.ts  ✅ MediaPipe WASM wrapper
+│   │   └── eye-metrics.ts      ✅ EAR, blink detection, gaze stability (cold-start fix)
+│   ├── calibration/
+│   │   ├── types.ts            ✅ CalibrationData v2, WorkingBaselineCalibration
+│   │   ├── storage.ts          ✅ localStorage save/load/clear with version check
+│   │   └── processor.ts        ✅ Threshold calculations, working baseline stats
+│   └── biometrics/
+│       ├── types.ts            ✅ HR/HRV/Combined types
+│       ├── hrv-calculator.ts   ✅ RMSSD/SDNN from IBI data (waiting for watch app)
+│       ├── flow-calculator.ts  ✅ Z-score flow scoring with EMA smoothing
+│       └── flow-calculator.test.ts ✅ 10 tests covering algorithm behavior
 └── components/
-    └── flow-dashboard/         TODO (Phase 3)
+    └── calibration/
+        └── CalibrationOverlay.tsx ✅ 4-step calibration UI with reading text
 ```
 
 ## Remember
