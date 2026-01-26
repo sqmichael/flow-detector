@@ -26,8 +26,8 @@ import type {
   FrameEyeMetrics,
   GazeData,
   BlinkState,
-  DEFAULT_EYE_TRACKING_CONFIG,
 } from "@/lib/mediapipe/types";
+import type { CalibrationData } from "@/lib/calibration/types";
 
 export interface UseEyeTrackingOptions {
   /** Video element to process */
@@ -36,6 +36,8 @@ export interface UseEyeTrackingOptions {
   enabled?: boolean;
   /** Configuration overrides */
   config?: Partial<EyeTrackingConfig>;
+  /** Calibration data for personalized thresholds */
+  calibration?: CalibrationData | null;
   /** Callback when new aggregated metrics are available */
   onMetrics?: (metrics: AggregatedEyeMetrics) => void;
 }
@@ -61,6 +63,29 @@ const DEFAULT_CONFIG: EyeTrackingConfig = {
 };
 
 /**
+ * Derive config from calibration data
+ *
+ * Overrides default thresholds with personalized values
+ */
+function deriveConfigFromCalibration(
+  baseConfig: EyeTrackingConfig,
+  calibration: CalibrationData | null | undefined
+): EyeTrackingConfig {
+  if (!calibration) return baseConfig;
+
+  return {
+    ...baseConfig,
+    blinkEARThreshold: calibration.ear.blinkThreshold,
+    // Add buffer to min/max durations based on personal timing
+    minBlinkDurationMs: Math.max(
+      30,
+      calibration.blinkTiming.minBlinkDuration - 20
+    ),
+    maxBlinkDurationMs: calibration.blinkTiming.maxBlinkDuration + 50,
+  };
+}
+
+/**
  * Hook for eye tracking using MediaPipe FaceLandmarker
  *
  * @example
@@ -77,9 +102,20 @@ export function useEyeTracking({
   videoElement,
   enabled = false,
   config: configOverrides,
+  calibration,
   onMetrics,
 }: UseEyeTrackingOptions): UseEyeTrackingReturn {
-  const config: EyeTrackingConfig = { ...DEFAULT_CONFIG, ...configOverrides };
+  // Derive config from calibration, then apply any manual overrides
+  const calibratedConfig = deriveConfigFromCalibration(DEFAULT_CONFIG, calibration);
+  const config: EyeTrackingConfig = { ...calibratedConfig, ...configOverrides };
+
+  // Log when using calibrated thresholds
+  if (calibration && enabled) {
+    console.log("[EyeTracking] Using calibrated thresholds:", {
+      blinkEARThreshold: config.blinkEARThreshold.toFixed(3),
+      blinkDurationRange: `${config.minBlinkDurationMs}-${config.maxBlinkDurationMs}ms`,
+    });
+  }
 
   const [state, setState] = useState<EyeTrackingState>({
     isInitialized: false,
@@ -175,13 +211,14 @@ export function useEyeTracking({
 
       // Check if aggregation window has elapsed
       if (timestamp - windowStartRef.current >= config.aggregationWindowMs) {
-        // Aggregate metrics
+        // Aggregate metrics (pass gaze calibration if available)
         const aggregated = aggregateMetrics(
           frameHistoryRef.current,
           gazeHistoryRef.current,
           blinkStateRef.current.blinkRate,
           windowStartRef.current,
-          timestamp
+          timestamp,
+          calibration?.gaze
         );
 
         // Update state and notify
@@ -200,7 +237,7 @@ export function useEyeTracking({
         });
       }
     },
-    [videoElement, config]
+    [videoElement, config, calibration]
   );
 
   /**
