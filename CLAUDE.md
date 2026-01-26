@@ -175,10 +175,12 @@ src/
         └── CalibrationOverlay.tsx ✅ 4-step calibration UI with reading text
 ```
 
+## References
+
+- Architecture + data sources: `docs/architecture.md`
+- Watch Bridge plan: `WATCH-BRIDGE-PLAN.md`
+
 ## Remember
 
-- **Stay focused on the current phase** - Don't jump ahead
-- **Use TodoWrite** to track all tasks
-- **Test each sensor independently** before integration
-- **The user is non-technical** - Keep explanations simple
-- **Commit working code** - Don't stop with broken builds
+- The user is non-technical - keep explanations simple
+- Stay focused on the current phase

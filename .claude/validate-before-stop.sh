@@ -44,6 +44,22 @@ if [ -f "CLAUDE.md" ]; then
     fi
 fi
 
+# 6. Check if branch is pushed to remote
+if git status 2>/dev/null | grep -q "Your branch is ahead"; then
+    errors+=("Branch not pushed to remote. Please push your changes.")
+fi
+
+# 7. Check if a PR exists for this branch (requires gh CLI)
+if command -v gh &> /dev/null; then
+    BRANCH=$(git branch --show-current 2>/dev/null)
+    if [ -n "$BRANCH" ] && [ "$BRANCH" != "main" ] && [ "$BRANCH" != "master" ]; then
+        PR_COUNT=$(gh pr list --head "$BRANCH" --state open --json number --jq length 2>/dev/null || echo "0")
+        if [ "$PR_COUNT" -eq 0 ]; then
+            errors+=("No PR exists for branch '$BRANCH'. Create a PR so Codex can review your changes.")
+        fi
+    fi
+fi
+
 # Output result
 if [ ${#errors[@]} -gt 0 ]; then
     # Join errors with newlines
