@@ -70,6 +70,12 @@ export interface WorkingBaselineCalibration {
   captureDurationMs: number;
   /** Number of 5-second windows captured */
   windowCount: number;
+  /** Average RMSSD during normal work (ms) — only present if HRM was connected during calibration */
+  hrvRmssdMean?: number;
+  /** Standard deviation of RMSSD */
+  hrvRmssdStdDev?: number;
+  /** Number of HRV samples captured during baseline */
+  hrvSampleCount?: number;
 }
 
 /**
@@ -154,6 +160,8 @@ export interface WorkingBaselineWindow {
   gazeStability: number;
   averageEAR: number;
   timestamp: number;
+  /** RMSSD value at this window, if HRM was connected */
+  rmssd?: number;
 }
 
 /**

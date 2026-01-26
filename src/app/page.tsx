@@ -4,6 +4,7 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
 import { usePulsoid } from "@/hooks/use-pulsoid";
+import { useBleHrm } from "@/hooks/use-ble-hrm";
 import { useCalibration } from "@/hooks/use-calibration";
 import {
   calculateCombinedFlow,
@@ -27,6 +28,23 @@ export default function Home() {
   const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
   const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
 
+  // BLE Heart Rate Monitor
+  const {
+    isConnected: bleConnected,
+    isConnecting: bleConnecting,
+    deviceName: bleDeviceName,
+    heartRate: bleHeartRate,
+    latestIBI,
+    hrvMetrics,
+    error: bleError,
+    connect: connectBle,
+    disconnect: disconnectBle,
+  } = useBleHrm();
+
+  // Keep HRV metrics in a ref for the calibration getter (avoids stale closures)
+  const hrvMetricsRef = useRef(hrvMetrics);
+  hrvMetricsRef.current = hrvMetrics;
+
   // Calibration
   const {
     state: calibrationState,
@@ -41,9 +59,10 @@ export default function Home() {
     onComplete: (data) => {
       console.log("[Page] Calibration complete:", data);
     },
+    getHrvMetrics: () => hrvMetricsRef.current,
   });
 
-  // Pulsoid connection for heart rate
+  // Pulsoid connection for heart rate (fallback)
   const {
     isConnected: watchConnected,
     heartRate,
@@ -52,14 +71,18 @@ export default function Home() {
     disconnect: disconnectPulsoid,
   } = usePulsoid();
 
+  // Prefer BLE HRM over Pulsoid for heart rate and HRV
+  const effectiveHeartRate = bleConnected ? bleHeartRate : heartRate;
+  const effectiveHrvMetrics = bleConnected ? hrvMetrics : null;
+
   // Callback to handle new metrics with EMA smoothing
   const handleMetrics = useCallback(
     (m: Parameters<typeof calculateCombinedFlow>[0]) => {
       // Calculate combined flow with working baseline from calibration
       const combined = calculateCombinedFlow(
         m,
-        null,
-        heartRate,
+        effectiveHrvMetrics,
+        effectiveHeartRate,
         calibrationData?.workingBaseline ?? null
       );
 
@@ -79,7 +102,7 @@ export default function Home() {
       };
       setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
     },
-    [heartRate, calibrationData]
+    [effectiveHeartRate, effectiveHrvMetrics, calibrationData]
   );
 
   const { state: trackingState, metrics } = useEyeTracking({
@@ -94,8 +117,8 @@ export default function Home() {
     if (!metrics) return null;
     const combined = calculateCombinedFlow(
       metrics,
-      null,
-      heartRate,
+      effectiveHrvMetrics,
+      effectiveHeartRate,
       calibrationData?.workingBaseline ?? null
     );
     // Use smoothed score from flow detector
@@ -103,7 +126,7 @@ export default function Home() {
       ...combined,
       combinedFlowScore: flowState.smoothedScore,
     };
-  }, [metrics, heartRate, calibrationData, flowState.smoothedScore]);
+  }, [metrics, effectiveHeartRate, effectiveHrvMetrics, calibrationData, flowState.smoothedScore]);
 
   const handleStart = async () => {
     const streamStarted = await startStream();
@@ -406,6 +429,134 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* BLE HRM Connection Panel */}
+          <div
+            style={{
+              marginTop: "1rem",
+              padding: "1rem",
+              backgroundColor: "#1a1a1a",
+              borderRadius: "12px",
+              border: bleConnected ? "1px solid #8b5cf6" : "1px solid #333",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <span style={{ fontWeight: "bold" }}>BLE Heart Rate Monitor</span>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  fontSize: "0.875rem",
+                  color: bleConnected ? "#8b5cf6" : "#888",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    backgroundColor: bleConnected ? "#8b5cf6" : "#666",
+                  }}
+                />
+                {bleConnecting
+                  ? "Connecting..."
+                  : bleConnected
+                    ? bleDeviceName ?? "Connected"
+                    : "Disconnected"}
+              </span>
+            </div>
+
+            {!bleConnected ? (
+              <button
+                onClick={connectBle}
+                disabled={bleConnecting}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#8b5cf6",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: bleConnecting ? "wait" : "pointer",
+                  fontSize: "0.875rem",
+                  opacity: bleConnecting ? 0.7 : 1,
+                }}
+              >
+                {bleConnecting ? "Connecting..." : "Connect HRM"}
+              </button>
+            ) : (
+              <button
+                onClick={disconnectBle}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem 1rem",
+                  backgroundColor: "#ef4444",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Disconnect
+              </button>
+            )}
+
+            {bleError && (
+              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                {bleError}
+              </p>
+            )}
+
+            {/* BLE HRM Metrics */}
+            {bleConnected && (
+              <div
+                style={{
+                  marginTop: "1rem",
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "0.5rem",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
+                    {bleHeartRate ?? "--"}
+                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> BPM</span>
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    backgroundColor: "#0a0a0a",
+                    borderRadius: "8px",
+                    textAlign: "center",
+                  }}
+                >
+                  <div style={{ fontSize: "0.75rem", color: "#888" }}>RMSSD</div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#8b5cf6" }}>
+                    {hrvMetrics?.rmssd?.toFixed(0) ?? "--"}
+                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> ms</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right Column - Metrics Display */}
@@ -424,7 +575,7 @@ export default function Home() {
                 }}
               >
                 <div style={{ fontSize: "0.875rem", color: "#888", marginBottom: "0.5rem" }}>
-                  {combinedMetrics.hasWatchData ? "Combined Flow State" : "Flow State (Eye Only)"}
+                  {combinedMetrics.hasWatchData ? "Combined Flow State (Eye + HRV)" : "Flow State (Eye Only)"}
                   {hasCalibration && " • Calibrated"}
                 </div>
                 <div
@@ -509,6 +660,20 @@ export default function Home() {
                   value={`${(combinedMetrics.eyeFlowIndicator * 100).toFixed(0)}%`}
                   subtitle="Eye-only score"
                 />
+                {combinedMetrics.rmssd !== null && (
+                  <MetricCard
+                    label="RMSSD"
+                    value={`${combinedMetrics.rmssd.toFixed(0)}ms`}
+                    subtitle="HRV metric"
+                  />
+                )}
+                {combinedMetrics.sdnn !== null && (
+                  <MetricCard
+                    label="SDNN"
+                    value={`${combinedMetrics.sdnn.toFixed(0)}ms`}
+                    subtitle="HRV variability"
+                  />
+                )}
               </div>
 
               {/* Calibration Info */}

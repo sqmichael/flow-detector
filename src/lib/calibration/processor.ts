@@ -207,7 +207,7 @@ export function calculateWorkingBaselineCalibration(
   const lastTimestamp = windows[windows.length - 1].timestamp;
   const captureDurationMs = lastTimestamp - firstTimestamp;
 
-  const result = {
+  const result: WorkingBaselineCalibration = {
     blinkRateMean: mean(blinkRates),
     blinkRateStdDev: Math.max(stdDev(blinkRates), 1), // Minimum 1 to avoid division by zero
     gazeStabilityMean: mean(gazeStabilities),
@@ -217,6 +217,22 @@ export function calculateWorkingBaselineCalibration(
     captureDurationMs,
     windowCount: windows.length,
   };
+
+  // Compute HRV baseline if RMSSD data was captured during calibration
+  const rmssdValues = windows
+    .map((w) => w.rmssd)
+    .filter((v): v is number => v !== undefined && v > 0);
+
+  if (rmssdValues.length >= 3) {
+    result.hrvRmssdMean = mean(rmssdValues);
+    result.hrvRmssdStdDev = Math.max(stdDev(rmssdValues), 2); // Min 2ms to avoid div-by-zero
+    result.hrvSampleCount = rmssdValues.length;
+
+    console.log("[Calibration] Calculated HRV baseline:", {
+      rmssd: `${result.hrvRmssdMean.toFixed(1)} ± ${result.hrvRmssdStdDev.toFixed(1)}ms`,
+      samples: result.hrvSampleCount,
+    });
+  }
 
   console.log("[Calibration] Calculated working baseline:", {
     blinkRate: `${result.blinkRateMean.toFixed(1)} ± ${result.blinkRateStdDev.toFixed(1)}/min`,
