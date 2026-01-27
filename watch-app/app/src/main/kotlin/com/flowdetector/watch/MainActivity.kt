@@ -71,10 +71,12 @@ class MainActivity : ComponentActivity() {
                 service = service,
                 prefs = prefs,
                 onStartStreaming = { url ->
-                    // Start as a foreground service first, then bind handles the rest
-                    val intent = Intent(this, SensorService::class.java)
+                    // Pass URL via intent extra so onStartCommand can self-start
+                    // streaming even if the service binding hasn't completed yet.
+                    val intent = Intent(this, SensorService::class.java).apply {
+                        putExtra(SensorService.EXTRA_SERVER_URL, url)
+                    }
                     startForegroundService(intent)
-                    sensorService?.startStreaming(url)
                 },
                 onStopStreaming = {
                     sensorService?.stopStreaming()

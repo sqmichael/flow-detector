@@ -33,6 +33,7 @@ class SensorService : LifecycleService() {
         private const val TAG = "[SensorService]"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "flow_sensor_channel"
+        const val EXTRA_SERVER_URL = "server_url"
     }
 
     // --- Binder for MainActivity ---
@@ -80,6 +81,24 @@ class SensorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         webSocketManager = WebSocketManager(webSocketCallback)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        super.onStartCommand(intent, flags, startId)
+
+        // Always call startForeground immediately to satisfy the 5-second ANR deadline
+        // after startForegroundService() is called by the activity.
+        startForeground(NOTIFICATION_ID, createNotification())
+
+        val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
+        if (serverUrl != null && !_isStreaming.value) {
+            Log.i(TAG, "Starting streaming from onStartCommand: $serverUrl")
+            _connectionError.value = null
+            webSocketManager.connect(serverUrl)
+            initializeSdk()
+        }
+
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
