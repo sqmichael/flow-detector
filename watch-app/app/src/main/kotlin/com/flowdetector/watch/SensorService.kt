@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
+import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
 import com.samsung.android.service.health.tracking.HealthTrackingService
@@ -159,7 +160,7 @@ class SensorService : LifecycleService() {
         }
     }
 
-    private val connectionListener = object : HealthTrackingService.ConnectionListener {
+    private val connectionListener = object : ConnectionListener {
         override fun onConnectionSuccess() {
             Log.i(TAG, "Samsung Health SDK connected")
             checkCapabilitiesAndStartTracking()
