@@ -1,6 +1,7 @@
 package com.flowdetector.watch
 
 import android.Manifest
+import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -137,7 +138,7 @@ fun FlowDetectorWatchApp(
     val ipInputLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val results = RemoteInputIntentHelper.getResults(result.data ?: return@rememberLauncherForActivityResult)
+        val results = result.data?.let { RemoteInput.getResultsFromIntent(it) }
         val newIp = results?.getCharSequence(IP_INPUT_KEY)?.toString()
         if (!newIp.isNullOrBlank()) {
             ipAddress = newIp
