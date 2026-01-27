@@ -70,7 +70,7 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Logic (Phase 3) - **EDA + WATCH RELAY INTEGRATION COMPLETE, FOCUS MODE NEXT**
+Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
@@ -88,9 +88,10 @@ Phase: Logic (Phase 3) - **EDA + WATCH RELAY INTEGRATION COMPLETE, FOCUS MODE NE
 - ✅ Blink rate cold-start fix (blends with baseline for first 30 seconds)
 - ✅ Algorithm test suite (17 tests, all passing)
 - ✅ Graceful degradation: immediate tier drop-back when sensors disconnect
+- ✅ Galaxy Watch Kotlin app (watch-app/) — Compose UI, Samsung Health SDK, WebSocket with backoff
 
 ### What's Next
-- **Galaxy Watch Kotlin App** — Custom Wear OS app to stream HR, IBI, and EDA via WebSocket to the relay server (Phase 4, separate Android Studio project)
+- **On-device testing** — Deploy watch-app to Galaxy Watch 8, download Samsung Health Sensor SDK AAR, verify end-to-end data flow
 - **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
 
 ## Calibration System
@@ -216,6 +217,14 @@ The watch app is a WebSocket CLIENT that connects to the relay server on the Mac
 ## File Structure
 
 ```
+watch-app/                             ✅ Galaxy Watch Kotlin app (Wear OS)
+├── app/src/main/kotlin/com/flowdetector/watch/
+│   ├── MessageSerializer.kt          ✅ Protocol data classes → JSON
+│   ├── WebSocketManager.kt           ✅ OkHttp WebSocket + exponential backoff
+│   ├── SensorService.kt              ✅ Samsung Health SDK bridge (HR + IBI + EDA)
+│   └── MainActivity.kt               ✅ Compose UI (HR display, IP input, connect button)
+├── app/src/main/AndroidManifest.xml   ✅ Permissions + foreground service
+└── app/build.gradle.kts               ✅ Dependencies (Samsung AAR, OkHttp, Wear Compose)
 server/
 └── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
 src/
