@@ -76,6 +76,12 @@ export interface WorkingBaselineCalibration {
   hrvRmssdStdDev?: number;
   /** Number of HRV samples captured during baseline */
   hrvSampleCount?: number;
+  /** Average SCL during normal work (microsiemens) — only present if watch EDA was streaming during calibration */
+  edaSclMean?: number;
+  /** Standard deviation of SCL */
+  edaSclStdDev?: number;
+  /** Number of EDA samples captured during baseline */
+  edaSampleCount?: number;
 }
 
 /**
@@ -83,7 +89,7 @@ export interface WorkingBaselineCalibration {
  */
 export interface CalibrationData {
   /** Version for migration support */
-  version: 2;
+  version: 3;
   /** Timestamp when calibration was performed */
   calibratedAt: number;
   /** EAR baseline data */
@@ -162,6 +168,8 @@ export interface WorkingBaselineWindow {
   timestamp: number;
   /** RMSSD value at this window, if HRM was connected */
   rmssd?: number;
+  /** SCL value at this window, if watch EDA was streaming */
+  scl?: number;
 }
 
 /**

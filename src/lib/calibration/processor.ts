@@ -234,6 +234,22 @@ export function calculateWorkingBaselineCalibration(
     });
   }
 
+  // Compute EDA baseline if SCL data was captured during calibration
+  const sclValues = windows
+    .map((w) => w.scl)
+    .filter((v): v is number => v !== undefined && v > 0);
+
+  if (sclValues.length >= 3) {
+    result.edaSclMean = mean(sclValues);
+    result.edaSclStdDev = Math.max(stdDev(sclValues), 0.1); // Min 0.1 µS to avoid div-by-zero
+    result.edaSampleCount = sclValues.length;
+
+    console.log("[Calibration] Calculated EDA baseline:", {
+      scl: `${result.edaSclMean.toFixed(2)} ± ${result.edaSclStdDev.toFixed(2)} µS`,
+      samples: result.edaSampleCount,
+    });
+  }
+
   console.log("[Calibration] Calculated working baseline:", {
     blinkRate: `${result.blinkRateMean.toFixed(1)} ± ${result.blinkRateStdDev.toFixed(1)}/min`,
     gazeStability: `${(result.gazeStabilityMean * 100).toFixed(0)} ± ${(result.gazeStabilityStdDev * 100).toFixed(0)}%`,
@@ -284,7 +300,7 @@ export function buildCalibrationData(
     earSamples.length + blinkEvents.length + gazeSamples.length + workingBaselineWindows.length;
 
   return {
-    version: 2,
+    version: 3,
     calibratedAt: Date.now(),
     ear,
     gaze,

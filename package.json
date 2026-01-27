@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "watch-server": "npx tsx server/watch-relay.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",
@@ -19,6 +20,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@types/web-bluetooth": "^0.0.21",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.7.3",
     "ws": "^8.19.0"
   }
