@@ -239,7 +239,7 @@ export function calculateWorkingBaselineCalibration(
     .map((w) => w.scl)
     .filter((v): v is number => v !== undefined && v > 0);
 
-  if (sclValues.length >= 20) {
+  if (sclValues.length >= 3) {
     result.edaSclMean = mean(sclValues);
     result.edaSclStdDev = Math.max(stdDev(sclValues), 0.1); // Min 0.1 µS to avoid div-by-zero
     result.edaSampleCount = sclValues.length;

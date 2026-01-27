@@ -350,7 +350,8 @@ export function calculateCombinedFlow(
 ): CombinedFlowMetrics {
   const timestamp = Date.now();
   const hasWatchData = hrvMetrics !== null;
-  const hasEdaData = edaData !== null;
+  // EDA tier only activates when HRV is also present (three-tier requires both)
+  const hasEdaData = edaData !== null && hrvMetrics !== null;
 
   // Calculate calibrated eye flow score
   const calibratedEyeScore = calculateCalibratedEyeFlowScore(eyeMetrics, workingBaseline);

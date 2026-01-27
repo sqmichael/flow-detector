@@ -102,7 +102,7 @@ Phase: Logic (Phase 3) - **EDA + WATCH RELAY INTEGRATION COMPLETE, FOCUS MODE NE
 3. **Gaze Center (3s)** — Look at dot → captures personal gaze center
 4. **Working Baseline (30s)** — Read text naturally → captures personal blink rate, gaze stability, EAR distributions (mean + stdDev), optionally RMSSD baseline if BLE HRM is connected, and optionally EDA baseline (SCL mean + stdDev) if Galaxy Watch is connected
 
-Calibration data persists in localStorage (version 3, with optional HRV and EDA fields). Old v1/v2 data is auto-cleared on version mismatch. EDA baseline requires minimum 20 samples (~20 seconds at 1 Hz) to be considered valid.
+Calibration data persists in localStorage (version 3, with optional HRV and EDA fields). Old v1/v2 data is auto-cleared on version mismatch. EDA baseline requires minimum 3 aggregation windows (~15 seconds) to be considered valid, matching the HRV baseline threshold.
 
 ## Flow Detection Algorithm
 
