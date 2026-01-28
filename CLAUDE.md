@@ -6,20 +6,20 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV/EDA 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Galaxy Watch 8  │     │ Decathlon HRM   │     │ MacBook Webcam  │
-│ (HR+IBI+EDA)    │     │ (HR + RR/IBI)   │     │  (Eye Tracking) │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │ WebSocket             │ Web Bluetooth         │ Local
-         │ via relay             │ (Chrome)              │ (MediaPipe)
-         ▼                       │                       │
-┌─────────────────┐              │                       │
-│ watch-relay.ts  │              │                       │
-│ (Node, :8765)   │              │                       │
-│ /watch → /browser│             │                       │
-└────────┬────────┘              │                       │
-         │ ws://localhost:8765   │                       │
-         └───────────────────────┼───────────────────────┘
+┌─────────────────┐                       ┌─────────────────┐
+│ Galaxy Watch 8  │                       │ MacBook Webcam  │
+│ (HR+IBI+EDA)    │                       │  (Eye Tracking) │
+└────────┬────────┘                       └────────┬────────┘
+         │ WebSocket                               │ Local
+         │ via relay                               │ (MediaPipe)
+         ▼                                         │
+┌─────────────────┐                                │
+│ watch-relay.ts  │                                │
+│ (Node, :8765)   │                                │
+│ /watch → /browser│                               │
+└────────┬────────┘                                │
+         │ ws://localhost:8765                      │
+         └─────────────────────────────────────────┘
                                  ▼
                     ┌────────────────────────┐
                     │     Fusion Hub         │
@@ -38,15 +38,9 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV/EDA 
                     └────────────────────────┘
 ```
 
-### Data Source Priority
+### Data Source
 
-The browser app uses a priority cascade for cardiac data:
-
-1. **Watch Stream** (HR + IBI + EDA) — richest data, via relay server (`use-watch-stream.ts`)
-2. **BLE HRM** (HR + IBI) — direct browser connection via Web Bluetooth (`use-ble-hrm.ts`)
-3. **Pulsoid** (HR only) — cloud WebSocket fallback (`use-pulsoid.ts`)
-
-The highest-priority connected source wins. EDA is only available from the Watch Stream.
+The Galaxy Watch is the sole cardiac/EDA data source, connected via the relay server (`use-watch-stream.ts`). BLE HRM (`use-ble-hrm.ts`) and Pulsoid (`use-pulsoid.ts`) hooks are kept as dormant fallbacks but are not imported by the dashboard.
 
 ### Watch Relay Server
 
@@ -70,14 +64,14 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
+Phase: Watch App (Phase 4) - **COMPLETE — END-TO-END VERIFIED ON GALAXY WATCH 8**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
-- ✅ Heart rate streaming via Pulsoid WebSocket (HR only, fallback)
-- ✅ BLE HRM integration via Web Bluetooth (HR + RR-intervals for HRV)
+- ⏸️ Heart rate streaming via Pulsoid WebSocket (dormant — hook kept, not imported)
+- ⏸️ BLE HRM integration via Web Bluetooth (dormant — hook kept, not imported)
 - ✅ HRV calculation (RMSSD/SDNN) from RR-interval data
-- ✅ Galaxy Watch relay server (standalone Node, port 8765)
+- ✅ Galaxy Watch relay server (standalone Node, port 8765, binds 0.0.0.0 for LAN)
 - ✅ Watch stream browser hook with exponential backoff reconnection
 - ✅ EDA (skin conductance) scoring with Gaussian z-score model
 - ✅ Three-tier flow scoring: eye-only → eye+HRV → eye+HRV+EDA
@@ -89,10 +83,15 @@ Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
 - ✅ Algorithm test suite (17 tests, all passing)
 - ✅ Graceful degradation: immediate tier drop-back when sensors disconnect
 - ✅ Galaxy Watch Kotlin app (watch-app/) — Compose UI, Samsung Health SDK, WebSocket with backoff
+- ✅ End-to-end verified: Watch → Relay → Browser dashboard (HR + IBI/RMSSD + EDA/SCL all flowing)
 
 ### What's Next
-- **On-device testing** — Deploy watch-app to Galaxy Watch 8, download Samsung Health Sensor SDK AAR, verify end-to-end data flow
 - **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
+
+### Watch App Setup Notes
+- Samsung Health Sensor SDK AAR must be downloaded from https://developer.samsung.com/health/sensor and placed in `watch-app/app/libs/`
+- **Health Platform Developer Mode** must be enabled on the watch: Settings → Apps → Health Platform → tap title 10x rapidly until "[Dev mode]" appears. Without this, the SDK silently queues the app and no sensor data is delivered.
+- Watch IP must be set to the MacBook's LAN IP (e.g. 192.168.1.45), relay server must be running (`npm run watch-server`)
 
 ## Calibration System
 
@@ -101,7 +100,7 @@ Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
 1. **Baseline (3s)** — Look at camera → captures open-eye EAR
 2. **Blink (5x)** — Blink naturally → captures closed-eye EAR and blink timing
 3. **Gaze Center (3s)** — Look at dot → captures personal gaze center
-4. **Working Baseline (30s)** — Read text naturally → captures personal blink rate, gaze stability, EAR distributions (mean + stdDev), optionally RMSSD baseline if BLE HRM is connected, and optionally EDA baseline (SCL mean + stdDev) if Galaxy Watch is connected
+4. **Working Baseline (30s)** — Read text naturally → captures personal blink rate, gaze stability, EAR distributions (mean + stdDev), optionally RMSSD baseline and EDA baseline (SCL mean + stdDev) if Galaxy Watch is connected
 
 Calibration data persists in localStorage (version 3, with optional HRV and EDA fields). Old v1/v2 data is auto-cleared on version mismatch. EDA baseline requires minimum 3 aggregation windows (~15 seconds) to be considered valid, matching the HRV baseline threshold.
 
@@ -177,22 +176,22 @@ The watch app is a WebSocket CLIENT that connects to the relay server on the Mac
 
 ## Key Data Sources
 
-### 1. Galaxy Watch 8 (Custom App - IN PROGRESS)
+### 1. Galaxy Watch 8 (Custom App - COMPLETE)
 - **Platform**: Wear OS 4+ with Samsung Health Sensor SDK
 - **Protocol**: WebSocket client → relay server (port 8765) → browser
 - **Data**: Heart Rate + IBI + EDA (skin conductance)
-- **Status**: Relay server and browser hook complete; Kotlin watch app pending (Phase 4)
+- **Status**: End-to-end verified on Galaxy Watch 8 (sole data source for dashboard)
 
-### 1b. Decathlon HRM Armband (BLE - COMPLETE)
+### 1b. Decathlon HRM Armband (BLE - DORMANT)
 - **Platform**: Any BLE Heart Rate Service device (tested with Decathlon optical armband)
 - **Protocol**: Web Bluetooth API (Chrome), standard Heart Rate Service (0x180D)
 - **Data**: Heart Rate + RR-intervals (IBI) for HRV calculation
-- **Why BLE**: Direct browser connection, no bridge app needed, standard protocol
+- **Status**: Hook kept (`use-ble-hrm.ts`) but not imported by dashboard. Galaxy Watch provides same data.
 
-### 1c. Pulsoid (Cloud - COMPLETE, FALLBACK)
+### 1c. Pulsoid (Cloud - DORMANT)
 - **Protocol**: Pulsoid WebSocket API
 - **Data**: Heart Rate only (no IBI/HRV)
-- **Status**: Lowest priority fallback
+- **Status**: Hook kept (`use-pulsoid.ts`) but not imported by dashboard. Galaxy Watch provides richer data.
 
 ### 2. Mudra Link (Neural - LOW PRIORITY)
 - **Repo**: Mudra Android App Example
@@ -236,8 +235,8 @@ src/
 │   ├── use-eye-tracking.ts     ✅ MediaPipe face landmarks → blink/gaze (accepts calibration)
 │   ├── use-calibration.ts      ✅ 4-step calibration state machine
 │   ├── use-watch-stream.ts     ✅ Galaxy Watch relay hook (HR + IBI + EDA, backoff reconnect)
-│   ├── use-ble-hrm.ts          ✅ BLE Heart Rate Monitor (HR + RR/IBI + HRV)
-│   ├── use-pulsoid.ts          ✅ Pulsoid WebSocket (HR only, fallback)
+│   ├── use-ble-hrm.ts          ⏸️ BLE Heart Rate Monitor (dormant — not imported)
+│   ├── use-pulsoid.ts          ⏸️ Pulsoid WebSocket (dormant — not imported)
 │   ├── use-sensor-server.ts    ⏸️ Legacy hook (kept but not imported)
 │   └── use-mudra-stream.ts     TODO (low priority)
 ├── lib/

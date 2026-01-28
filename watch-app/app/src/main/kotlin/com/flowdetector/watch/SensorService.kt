@@ -3,12 +3,18 @@ package com.flowdetector.watch
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
+import androidx.wear.ongoing.OngoingActivity
+import androidx.wear.ongoing.Status
 import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
@@ -19,14 +25,15 @@ import com.samsung.android.service.health.tracking.data.ValueKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Foreground service that bridges Samsung Health Sensor SDK
  * to WebSocketManager for streaming HR, IBI, and EDA data.
  *
- * Subscribes to HEART_RATE_CONTINUOUS and EDA_CONTINUOUS trackers
- * and forwards parsed sensor data as protocol-compliant JSON
- * to the relay server via WebSocket.
+ * Uses the Ongoing Activity API to stay visible on the watch face,
+ * which signals to Samsung's resource manager that this is an active
+ * health monitoring task and prevents the Freecessor from freezing it.
  */
 class SensorService : LifecycleService() {
 
@@ -37,9 +44,8 @@ class SensorService : LifecycleService() {
         const val EXTRA_SERVER_URL = "server_url"
     }
 
-    // --- Binder for MainActivity ---
-
     private val binder = LocalBinder()
+    private var wakeLock: PowerManager.WakeLock? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): SensorService = this@SensorService
@@ -82,24 +88,32 @@ class SensorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         webSocketManager = WebSocketManager(webSocketCallback)
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        @Suppress("WakelockTimeout") // Intentional: streaming runs until user taps Disconnect
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "FlowDetector::SensorStreaming"
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
 
         // Always call startForeground immediately to satisfy the 5-second ANR deadline
-        // after startForegroundService() is called by the activity.
         startForeground(NOTIFICATION_ID, createNotification())
 
         val serverUrl = intent?.getStringExtra(EXTRA_SERVER_URL)
         if (serverUrl != null && !_isStreaming.value) {
             Log.i(TAG, "Starting streaming from onStartCommand: $serverUrl")
             _connectionError.value = null
+            @Suppress("WakelockTimeout")
+            wakeLock?.acquire()
             webSocketManager.connect(serverUrl)
             initializeSdk()
         }
 
-        return START_NOT_STICKY
+        // START_STICKY: system will restart this service if killed
+        return START_STICKY
     }
 
     override fun onDestroy() {
@@ -110,10 +124,15 @@ class SensorService : LifecycleService() {
 
     // --- Public API ---
 
+    /**
+     * Called from bound clients. onStartCommand is the primary entry point;
+     * this is kept for cases where the service is already bound and running.
+     */
     fun startStreaming(serverUrl: String) {
         Log.i(TAG, "Starting streaming to $serverUrl")
         _connectionError.value = null
-
+        @Suppress("WakelockTimeout")
+        wakeLock?.acquire()
         startForeground(NOTIFICATION_ID, createNotification())
         webSocketManager.connect(serverUrl)
         initializeSdk()
@@ -122,27 +141,26 @@ class SensorService : LifecycleService() {
     fun stopStreaming() {
         Log.i(TAG, "Stopping streaming")
 
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+
         heartRateTracker?.unsetEventListener()
         heartRateTracker = null
-
         edaTracker?.unsetEventListener()
         edaTracker = null
-
         try {
             healthTrackingService?.disconnectService()
         } catch (e: Exception) {
             Log.w(TAG, "Error disconnecting health service: ${e.message}")
         }
         healthTrackingService = null
-
         webSocketManager.disconnect()
-
         _heartRate.value = null
         _lastIbi.value = null
         _currentScl.value = null
         _isConnected.value = false
         _isStreaming.value = false
-
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -180,7 +198,6 @@ class SensorService : LifecycleService() {
     private fun checkCapabilitiesAndStartTracking() {
         val service = healthTrackingService ?: return
         val supported = service.trackingCapability.supportHealthTrackerTypes
-
         val activeSensors = mutableListOf<String>()
 
         if (HealthTrackerType.HEART_RATE_CONTINUOUS in supported) {
@@ -189,7 +206,7 @@ class SensorService : LifecycleService() {
             activeSensors.add("heart_rate")
             Log.i(TAG, "Heart rate tracker subscribed")
         } else {
-            Log.w(TAG, "HEART_RATE_CONTINUOUS not supported on this device")
+            Log.w(TAG, "HEART_RATE_CONTINUOUS not supported")
         }
 
         if (HealthTrackerType.EDA_CONTINUOUS in supported) {
@@ -198,13 +215,12 @@ class SensorService : LifecycleService() {
             activeSensors.add("eda")
             Log.i(TAG, "EDA tracker subscribed")
         } else {
-            Log.w(TAG, "EDA_CONTINUOUS not supported — EDA sensor not available")
+            Log.w(TAG, "EDA_CONTINUOUS not supported")
             _connectionError.value = "EDA sensor not available"
         }
 
         webSocketManager.sensors = activeSensors
         _isStreaming.value = activeSensors.isNotEmpty()
-
         Log.i(TAG, "Active sensors: ${activeSensors.joinToString()}")
     }
 
@@ -212,35 +228,43 @@ class SensorService : LifecycleService() {
 
     private val heartRateListener = object : HealthTracker.TrackerEventListener {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
-            for (dp in dataPoints) {
-                val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
-                val hrStatus = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
+            lifecycleScope.launch {
+                for (dp in dataPoints) {
+                    try {
+                        val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
+                        val hrStatus = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
+                        if (hrStatus != 1) continue
 
-                // Only process valid readings (status 1 = successful)
-                if (hrStatus != 1) continue
+                        // IBI list may be empty (no beat detected in this window)
+                        var lastValidIbi: Int? = null
+                        try {
+                            val ibiList = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
+                            val ibiStatusList = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
+                            for (i in ibiList.indices) {
+                                if (i < ibiStatusList.size && ibiStatusList[i] == 0 && ibiList[i] != 0) {
+                                    lastValidIbi = ibiList[i]
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // IBI data not available in this packet — that's fine,
+                            // we still send the HR reading with ibi=null
+                            Log.d(TAG, "IBI data not available: ${e.message}")
+                        }
 
-                // Extract valid IBI values
-                val ibiList = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
-                val ibiStatusList = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
+                        val message = HeartRateMessage(
+                            bpm = hr,
+                            ibi = lastValidIbi,
+                            quality = 100,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        webSocketManager.send(message.toJson())
 
-                // Find the last valid IBI (most recent beat)
-                var lastValidIbi: Int? = null
-                for (i in ibiList.indices) {
-                    if (ibiStatusList[i] == 0 && ibiList[i] != 0) {
-                        lastValidIbi = ibiList[i]
+                        _heartRate.value = hr
+                        _lastIbi.value = lastValidIbi
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping incomplete HR data point: ${e.message}")
                     }
                 }
-
-                val message = HeartRateMessage(
-                    bpm = hr,
-                    ibi = lastValidIbi,
-                    quality = 100,
-                    timestamp = System.currentTimeMillis()
-                )
-                webSocketManager.send(message.toJson())
-
-                _heartRate.value = hr
-                _lastIbi.value = lastValidIbi
             }
         }
 
@@ -257,20 +281,26 @@ class SensorService : LifecycleService() {
 
     private val edaListener = object : HealthTracker.TrackerEventListener {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
-            for (dp in dataPoints) {
-                val scl = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE) ?: continue
-                val status = dp.getValue(ValueKey.EdaSet.STATUS) ?: continue
+            lifecycleScope.launch {
+                for (dp in dataPoints) {
+                    try {
+                        val scl = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE)
+                        val status = dp.getValue(ValueKey.EdaSet.STATUS)
 
-                // Only send valid EDA readings (status 0 = valid)
-                if (status != 0) continue
+                        // Only send valid EDA readings (status 0 = valid)
+                        if (status != 0) continue
 
-                val message = EdaMessage(
-                    scl = scl,
-                    timestamp = System.currentTimeMillis()
-                )
-                webSocketManager.send(message.toJson())
+                        val message = EdaMessage(
+                            scl = scl,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        webSocketManager.send(message.toJson())
 
-                _currentScl.value = scl
+                        _currentScl.value = scl
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping incomplete EDA data point: ${e.message}")
+                    }
+                }
             }
         }
 
@@ -303,7 +333,7 @@ class SensorService : LifecycleService() {
         }
     }
 
-    // --- Notification ---
+    // --- Notification with Ongoing Activity ---
 
     private fun createNotification(): Notification {
         val channel = NotificationChannel(
@@ -313,14 +343,37 @@ class SensorService : LifecycleService() {
         ).apply {
             description = "Active while streaming sensor data"
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val tapIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Flow Detector")
             .setContentText("Streaming HR & EDA...")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_WORKOUT)
+
+        // Ongoing Activity ties the notification to the watch face and launcher,
+        // signaling to Samsung's resource manager that this is an active task.
+        // Must be applied BEFORE building the notification.
+        val ongoingActivity = OngoingActivity.Builder(this, NOTIFICATION_ID, notificationBuilder)
+            .setStaticIcon(android.R.drawable.ic_menu_mylocation)
+            .setTouchIntent(tapIntent)
+            .setStatus(
+                Status.Builder()
+                    .addTemplate("Streaming sensors")
+                    .build()
+            )
             .build()
+
+        ongoingActivity.apply(this)
+
+        return notificationBuilder.build()
     }
 }

@@ -23,5 +23,11 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# TypeScript
+# Android / Gradle build artifacts
+watch-app/.gradle/
+watch-app/.kotlin/
+watch-app/build/
+watch-app/app/build/
+watch-app/local.properties
+watch-app/app/libs/*.aar
 tsconfig.tsbuildinfo

@@ -42,7 +42,7 @@ export interface UseCalibrationOptions {
   onComplete?: (data: CalibrationData) => void;
   /** Callback when calibration fails */
   onError?: (error: string) => void;
-  /** Optional: getter for current HRV metrics from BLE HRM, sampled during working baseline */
+  /** Optional: getter for current HRV metrics from Galaxy Watch, sampled during working baseline */
   getHrvMetrics?: () => import("@/lib/biometrics/types").HRVMetrics | null;
 }
 
@@ -377,8 +377,8 @@ export function useCalibration({
 
       const currentState = stateRef.current;
 
-      // Stop if calibration is idle or complete
-      if (currentState.step === "idle" || currentState.step === "complete") {
+      // Stop if calibration is idle, initializing, or complete
+      if (currentState.step === "idle" || currentState.step === "initializing" || currentState.step === "complete") {
         return;
       }
 
@@ -441,12 +441,19 @@ export function useCalibration({
 
     // Initialize MediaPipe if needed
     if (!isFaceLandmarkerInitialized()) {
+      // Show initializing state immediately so the overlay renders
+      setState((prev) => ({
+        ...prev,
+        step: "initializing",
+        instruction: "Initializing camera...",
+        error: null,
+      }));
       try {
         await initializeFaceLandmarker();
       } catch (err) {
         const error =
           err instanceof Error ? err.message : "Failed to initialize";
-        setState((prev) => ({ ...prev, error }));
+        setState((prev) => ({ ...prev, step: "idle", error }));
         onError?.(error);
         return;
       }

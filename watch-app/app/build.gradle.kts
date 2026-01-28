@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -5,16 +8,46 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Keystore properties
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "com.flowdetector.watch"
-    compileSdk = 36
+    compileSdk = 34
+
+    signingConfigs {
+        create("release") {
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+            storeFile = if (storeFilePath != null) {
+                file(storeFilePath)
+            } else {
+                // Default to the standard debug keystore location
+                file("${System.getProperty("user.home")}/.android/debug.keystore")
+            }
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
+        }
+    }
 
     defaultConfig {
         applicationId = "com.flowdetector.watch"
-        minSdk = 33 // Wear OS 4 (Galaxy Watch 4+)
-        targetSdk = 36
+        minSdk = 30
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures {
@@ -22,12 +55,12 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "1.8"
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
 }
 
@@ -37,13 +70,13 @@ dependencies {
     // Place the AAR in app/libs/
     implementation(files("libs/samsung-health-sensor-api.aar"))
 
-    // Wear OS Compose
-    implementation("androidx.wear.compose:compose-material:1.5.6")
-    implementation("androidx.wear.compose:compose-foundation:1.5.6")
-    implementation("androidx.activity:activity-compose:1.12.2")
+    // Wear OS Compose - Use consistent versions
+    implementation("androidx.wear.compose:compose-material:1.2.1")
+    implementation("androidx.wear.compose:compose-foundation:1.2.1")
+    implementation("androidx.activity:activity-compose:1.8.2")
 
     // Compose BOM
-    implementation(platform("androidx.compose:compose-bom:2026.01.00"))
+    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
@@ -52,20 +85,23 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // kotlinx.serialization for JSON
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 
     // Kotlin coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // AndroidX core
-    implementation("androidx.core:core-ktx:1.17.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
-    implementation("androidx.lifecycle:lifecycle-service:2.10.0")
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-service:2.6.2")
 
     // Wear input for RemoteInput
     implementation("androidx.wear:wear-input:1.2.0-alpha02")
 
+    // Ongoing Activity API
+    implementation("androidx.wear:wear-ongoing:1.1.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
 }

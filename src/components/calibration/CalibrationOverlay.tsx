@@ -12,15 +12,19 @@ import type { CalibrationState } from "@/lib/calibration/types";
 interface CalibrationOverlayProps {
   state: CalibrationState;
   onCancel: () => void;
+  onDone?: () => void;
 }
 
-export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps) {
+export function CalibrationOverlay({ state, onCancel, onDone }: CalibrationOverlayProps) {
   const { step, progress, instruction, blinksDetected, blinksRequired } = state;
 
   // Don't render if not calibrating
   if (step === "idle") {
     return null;
   }
+
+  // Show step dots only for the 4 real calibration steps (not initializing)
+  const showStepIndicator = step !== "initializing";
 
   return (
     <div
@@ -36,54 +40,58 @@ export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps)
         padding: "2rem",
       }}
     >
-      {/* Cancel Button */}
-      <button
-        onClick={onCancel}
-        style={{
-          position: "absolute",
-          top: "1rem",
-          right: "1rem",
-          padding: "0.5rem 1rem",
-          backgroundColor: "transparent",
-          color: "#888",
-          border: "1px solid #444",
-          borderRadius: "6px",
-          cursor: "pointer",
-          fontSize: "0.875rem",
-        }}
-      >
-        Cancel
-      </button>
+      {/* Cancel Button (hidden on completion — Done replaces it) */}
+      {step !== "complete" && (
+        <button
+          onClick={onCancel}
+          style={{
+            position: "absolute",
+            top: "1rem",
+            right: "1rem",
+            padding: "0.5rem 1rem",
+            backgroundColor: "transparent",
+            color: "#888",
+            border: "1px solid #444",
+            borderRadius: "6px",
+            cursor: "pointer",
+            fontSize: "0.875rem",
+          }}
+        >
+          Cancel
+        </button>
+      )}
 
-      {/* Step Indicator */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          marginBottom: "2rem",
-        }}
-      >
-        {["baseline", "blink", "gaze-center", "working-baseline"].map((s) => {
-          const stepOrder = ["baseline", "blink", "gaze-center", "working-baseline"];
-          const currentIndex = stepOrder.indexOf(step);
-          const thisIndex = stepOrder.indexOf(s);
-          const isComplete = step === "complete" || thisIndex < currentIndex;
-          const isCurrent = step === s;
+      {/* Step Indicator (hidden during initializing) */}
+      {showStepIndicator && (
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            marginBottom: "2rem",
+          }}
+        >
+          {["baseline", "blink", "gaze-center", "working-baseline"].map((s) => {
+            const stepOrder = ["baseline", "blink", "gaze-center", "working-baseline"];
+            const currentIndex = stepOrder.indexOf(step);
+            const thisIndex = stepOrder.indexOf(s);
+            const isComplete = step === "complete" || thisIndex < currentIndex;
+            const isCurrent = step === s;
 
-          return (
-            <div
-              key={s}
-              style={{
-                width: "12px",
-                height: "12px",
-                borderRadius: "50%",
-                backgroundColor: isCurrent ? "#3b82f6" : isComplete ? "#22c55e" : "#444",
-                transition: "background-color 0.3s",
-              }}
-            />
-          );
-        })}
-      </div>
+            return (
+              <div
+                key={s}
+                style={{
+                  width: "12px",
+                  height: "12px",
+                  borderRadius: "50%",
+                  backgroundColor: isCurrent ? "#3b82f6" : isComplete ? "#22c55e" : "#444",
+                  transition: "background-color 0.3s",
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
 
       {/* Instruction Text */}
       <div
@@ -100,12 +108,28 @@ export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps)
       </div>
 
       {/* Step-specific content */}
+      {step === "initializing" && (
+        <div
+          style={{
+            width: "24px",
+            height: "24px",
+            borderRadius: "50%",
+            backgroundColor: "#3b82f6",
+            boxShadow: "0 0 20px rgba(59, 130, 246, 0.5)",
+            animation: "pulse 1.5s ease-in-out infinite",
+          }}
+        />
+      )}
+
       {step === "baseline" && (
         <ProgressBar progress={progress} label="Capturing baseline..." />
       )}
 
       {step === "blink" && (
-        <BlinkCounter detected={blinksDetected} required={blinksRequired} />
+        <>
+          <GazeTarget />
+          <BlinkCounter detected={blinksDetected} required={blinksRequired} />
+        </>
       )}
 
       {step === "gaze-center" && (
@@ -145,6 +169,21 @@ export function CalibrationOverlay({ state, onCancel }: CalibrationOverlayProps)
           <div style={{ color: "#888", fontSize: "0.875rem" }}>
             Calibration saved. You can recalibrate anytime.
           </div>
+          <button
+            onClick={onDone}
+            style={{
+              marginTop: "1rem",
+              padding: "0.75rem 2rem",
+              fontSize: "1rem",
+              backgroundColor: "#22c55e",
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              cursor: "pointer",
+            }}
+          >
+            Done
+          </button>
         </div>
       )}
 

@@ -11,6 +11,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer, IncomingMessage } from "http";
 import { URL } from "url";
+import { networkInterfaces } from "os";
 
 const PORT = 8765;
 const VERBOSE = process.argv.includes("--verbose");
@@ -159,12 +160,25 @@ function handleBrowserConnection(ws: WebSocket) {
   });
 }
 
-httpServer.listen(PORT, () => {
-  log(`Listening on ws://localhost:${PORT}`);
-  log(`  Watch:   ws://localhost:${PORT}/watch`);
+httpServer.listen(PORT, "0.0.0.0", () => {
+  const localIp = getLocalIp();
+  log(`Listening on ws://0.0.0.0:${PORT}`);
+  log(`  Watch:   ws://${localIp}:${PORT}/watch`);
   log(`  Browser: ws://localhost:${PORT}/browser`);
   log(`  Verbose: ${VERBOSE ? "ON" : "OFF (use --verbose)"}`);
 });
+
+function getLocalIp(): string {
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return "localhost";
+}
 
 // Graceful shutdown
 process.on("SIGINT", () => {

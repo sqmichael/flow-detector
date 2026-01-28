@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
-import { usePulsoid } from "@/hooks/use-pulsoid";
-import { useBleHrm } from "@/hooks/use-ble-hrm";
 import { useWatchStream } from "@/hooks/use-watch-stream";
 import { useCalibration } from "@/hooks/use-calibration";
+import { useBiometricLog } from "@/hooks/use-biometric-log";
 import {
   calculateCombinedFlow,
   updateFlowDetector,
@@ -15,10 +14,8 @@ import {
 } from "@/lib/biometrics/flow-calculator";
 import { formatCalibrationDate } from "@/lib/calibration/storage";
 import { CalibrationOverlay } from "@/components/calibration/CalibrationOverlay";
-import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
-
-// Your Pulsoid token - in production, this would be in env vars
-const PULSOID_TOKEN = "d844e5e9-2b04-4597-9d57-979904a40dff";
+import FlowEndPrompt from "@/components/FlowEndPrompt";
+import type { CombinedFlowMetrics, WatchMessage } from "@/lib/biometrics/types";
 
 export default function Home() {
   const { state: cameraState, videoRef, startStream, stopStream } = useCameraStream();
@@ -29,18 +26,45 @@ export default function Home() {
   const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
   const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
 
-  // BLE Heart Rate Monitor
+  // Biometric logging (IndexedDB + JSONL export)
   const {
-    isConnected: bleConnected,
-    isConnecting: bleConnecting,
-    deviceName: bleDeviceName,
-    heartRate: bleHeartRate,
-    latestIBI,
-    hrvMetrics,
-    error: bleError,
-    connect: connectBle,
-    disconnect: disconnectBle,
-  } = useBleHrm();
+    logHR,
+    logEDA,
+    logFlow,
+    logMarker,
+    logAnnotation,
+    downloadSession,
+    eventCount,
+  } = useBiometricLog();
+
+  // Marker toast state
+  const [markerToast, setMarkerToast] = useState<{ visible: boolean; showInput: boolean; tag: string }>({
+    visible: false,
+    showInput: false,
+    tag: "",
+  });
+  const markerToastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const markerInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Post-flow prompt state
+  const [flowEndPrompt, setFlowEndPrompt] = useState<{
+    visible: boolean;
+    startTime: number;
+    endTime: number;
+  } | null>(null);
+  const prevInFlowRef = useRef(false);
+
+  // Watch message handler for logging
+  const handleWatchMessage = useCallback(
+    (msg: WatchMessage) => {
+      if (msg.type === "hr") {
+        logHR(msg.bpm, msg.ibi, null, null);
+      } else if (msg.type === "eda") {
+        logEDA(msg.scl);
+      }
+    },
+    [logHR, logEDA]
+  );
 
   // Galaxy Watch stream (HR + IBI + EDA via relay server)
   const {
@@ -51,11 +75,11 @@ export default function Home() {
     hrvMetrics: watchStreamHrvMetrics,
     currentSCL,
     error: watchStreamError,
-  } = useWatchStream();
+  } = useWatchStream({ onMessage: handleWatchMessage });
 
   // Keep HRV metrics in a ref for the calibration getter (avoids stale closures)
-  const hrvMetricsRef = useRef(hrvMetrics);
-  hrvMetricsRef.current = hrvMetrics;
+  const hrvMetricsRef = useRef(watchStreamHrvMetrics);
+  hrvMetricsRef.current = watchStreamHrvMetrics;
 
   // Calibration
   const {
@@ -74,27 +98,10 @@ export default function Home() {
     getHrvMetrics: () => hrvMetricsRef.current,
   });
 
-  // Pulsoid connection for heart rate (fallback)
-  const {
-    isConnected: watchConnected,
-    heartRate,
-    error: watchError,
-    connect: connectPulsoid,
-    disconnect: disconnectPulsoid,
-  } = usePulsoid();
-
-  // Data source priority: Watch Stream > BLE HRM > Pulsoid
-  const effectiveHeartRate = watchStreamConnected
-    ? watchStreamHeartRate
-    : bleConnected
-      ? bleHeartRate
-      : heartRate;
-  const effectiveHrvMetrics = watchStreamConnected
-    ? watchStreamHrvMetrics
-    : bleConnected
-      ? hrvMetrics
-      : null;
-  const effectiveEDA = watchStreamConnected ? currentSCL : null;
+  // Galaxy Watch is the sole cardiac/EDA source
+  const effectiveHeartRate = watchStreamHeartRate;
+  const effectiveHrvMetrics = watchStreamHrvMetrics;
+  const effectiveEDA = currentSCL;
 
   // Callback to handle new metrics with EMA smoothing
   const handleMetrics = useCallback(
@@ -117,6 +124,14 @@ export default function Home() {
       flowDetectorRef.current = newFlowState;
       setFlowState(newFlowState);
 
+      // Log flow score to IndexedDB
+      const tier = combined.hasEdaData
+        ? "eye+hrv+eda"
+        : combined.hasWatchData
+          ? "eye+hrv"
+          : "eye-only";
+      logFlow(combined.combinedFlowScore, newFlowState.smoothedScore, tier, newFlowState.inFlow);
+
       // Store in history with smoothed score
       const smoothedCombined = {
         ...combined,
@@ -124,7 +139,7 @@ export default function Home() {
       };
       setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
     },
-    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData]
+    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData, logFlow]
   );
 
   const { state: trackingState, metrics } = useEyeTracking({
@@ -180,10 +195,71 @@ export default function Home() {
 
   const handleCancelCalibration = () => {
     cancelCalibration();
+    // Resume tracking if camera is still running
+    if (cameraState.stream) {
+      setIsTracking(true);
+    }
   };
 
-  const handleWatchConnect = () => {
-    connectPulsoid(PULSOID_TOKEN);
+  const handleCalibrationDone = () => {
+    cancelCalibration(); // resets to idle, hides overlay
+    setIsTracking(true); // resume eye tracking with new calibration
+  };
+
+  // Detect flow end: inFlow transitions true → false
+  useEffect(() => {
+    const wasInFlow = prevInFlowRef.current;
+    prevInFlowRef.current = flowState.inFlow;
+
+    if (wasInFlow && !flowState.inFlow && flowState.flowOnsetTime) {
+      setFlowEndPrompt({
+        visible: true,
+        startTime: flowState.flowOnsetTime,
+        endTime: Date.now(),
+      });
+    }
+  }, [flowState.inFlow, flowState.flowOnsetTime]);
+
+  // Keyboard shortcut: M for marker
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        // Log marker immediately (tag can be added via toast)
+        logMarker();
+        setMarkerToast({ visible: true, showInput: true, tag: "" });
+
+        // Clear any existing timer
+        if (markerToastTimerRef.current) clearTimeout(markerToastTimerRef.current);
+
+        // Auto-dismiss after 3 seconds
+        markerToastTimerRef.current = setTimeout(() => {
+          setMarkerToast((prev) => ({ ...prev, visible: false }));
+        }, 3000);
+
+        // Focus the input on next tick
+        setTimeout(() => markerInputRef.current?.focus(), 50);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [logMarker]);
+
+  const handleMarkerTag = (tag: string) => {
+    if (tag.trim()) {
+      // Log another marker with the tag (the tagless one was already logged on keypress)
+      logMarker(tag.trim());
+    }
+    setMarkerToast({ visible: false, showInput: false, tag: "" });
+    if (markerToastTimerRef.current) {
+      clearTimeout(markerToastTimerRef.current);
+      markerToastTimerRef.current = null;
+    }
   };
 
   const getFlowColor = (value: number) => {
@@ -203,7 +279,65 @@ export default function Home() {
   return (
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
       {/* Calibration Overlay */}
-      <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} />
+      <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} onDone={handleCalibrationDone} />
+
+      {/* Post-flow confirmation prompt */}
+      {flowEndPrompt?.visible && (
+        <FlowEndPrompt
+          startTime={flowEndPrompt.startTime}
+          endTime={flowEndPrompt.endTime}
+          onLabel={(label) => {
+            logAnnotation(label, flowEndPrompt.startTime, flowEndPrompt.endTime);
+            setFlowEndPrompt(null);
+          }}
+          onDismiss={() => setFlowEndPrompt(null)}
+        />
+      )}
+
+      {/* Marker toast */}
+      {markerToast.visible && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: "2rem",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 1000,
+            backgroundColor: "rgba(30, 30, 40, 0.95)",
+            border: "1px solid rgba(59, 130, 246, 0.4)",
+            borderRadius: "10px",
+            padding: "0.75rem 1.25rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <span style={{ color: "#3b82f6", fontSize: "0.9rem" }}>Marker logged</span>
+          {markerToast.showInput && (
+            <input
+              ref={markerInputRef}
+              type="text"
+              placeholder="Add tag (Enter to save)"
+              style={{
+                backgroundColor: "transparent",
+                border: "1px solid #444",
+                borderRadius: "4px",
+                padding: "0.3rem 0.5rem",
+                color: "#ccc",
+                fontSize: "0.85rem",
+                outline: "none",
+                width: "160px",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleMarkerTag((e.target as HTMLInputElement).value);
+                if (e.key === "Escape") setMarkerToast({ visible: false, showInput: false, tag: "" });
+              }}
+            />
+          )}
+        </div>
+      )}
 
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
@@ -304,6 +438,61 @@ export default function Home() {
               }}
             >
               {hasCalibration ? "Recalibrate" : "Calibrate"}
+            </button>
+          </div>
+
+          {/* Logging Controls */}
+          <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <button
+              onClick={() => {
+                logMarker();
+                setMarkerToast({ visible: true, showInput: true, tag: "" });
+                if (markerToastTimerRef.current) clearTimeout(markerToastTimerRef.current);
+                markerToastTimerRef.current = setTimeout(() => {
+                  setMarkerToast((prev) => ({ ...prev, visible: false }));
+                }, 3000);
+                setTimeout(() => markerInputRef.current?.focus(), 50);
+              }}
+              style={{
+                padding: "0.5rem 1rem",
+                fontSize: "0.85rem",
+                backgroundColor: "#374151",
+                color: "#ccc",
+                border: "1px solid #555",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+              title="Drop a marker (keyboard: M)"
+            >
+              Marker (M)
+            </button>
+            <button
+              onClick={downloadSession}
+              style={{
+                padding: "0.5rem 1rem",
+                fontSize: "0.85rem",
+                backgroundColor: "#374151",
+                color: "#ccc",
+                border: "1px solid #555",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              Download Log
+              {eventCount > 0 && (
+                <span
+                  style={{
+                    marginLeft: "0.5rem",
+                    backgroundColor: "#3b82f6",
+                    color: "#fff",
+                    borderRadius: "9999px",
+                    padding: "0.1rem 0.4rem",
+                    fontSize: "0.7rem",
+                  }}
+                >
+                  {eventCount}
+                </span>
+              )}
             </button>
           </div>
 
@@ -471,233 +660,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Pulsoid Connection Panel (fallback) */}
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              backgroundColor: "#1a1a1a",
-              borderRadius: "12px",
-              border: "1px solid #333",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <span style={{ fontWeight: "bold" }}>Pulsoid (Fallback)</span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  fontSize: "0.875rem",
-                  color: watchConnected ? "#22c55e" : "#888",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: watchConnected ? "#22c55e" : "#666",
-                  }}
-                />
-                {watchConnected ? "Connected" : "Disconnected"}
-              </span>
-            </div>
-
-            {!watchConnected ? (
-              <button
-                onClick={handleWatchConnect}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#3b82f6",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Connect to Pulsoid
-              </button>
-            ) : (
-              <button
-                onClick={disconnectPulsoid}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#ef4444",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Disconnect
-              </button>
-            )}
-
-            {watchError && (
-              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                {watchError}
-              </p>
-            )}
-
-            {/* Pulsoid Metrics */}
-            {watchConnected && (
-              <div
-                style={{
-                  marginTop: "1rem",
-                  padding: "0.75rem",
-                  backgroundColor: "#0a0a0a",
-                  borderRadius: "8px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
-                <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#ef4444" }}>
-                  {heartRate ?? "--"}
-                  <span style={{ fontSize: "1rem", fontWeight: "normal" }}> BPM</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* BLE HRM Connection Panel */}
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              backgroundColor: "#1a1a1a",
-              borderRadius: "12px",
-              border: bleConnected ? "1px solid #8b5cf6" : "1px solid #333",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <span style={{ fontWeight: "bold" }}>BLE Heart Rate Monitor</span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  fontSize: "0.875rem",
-                  color: bleConnected ? "#8b5cf6" : "#888",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: bleConnected ? "#8b5cf6" : "#666",
-                  }}
-                />
-                {bleConnecting
-                  ? "Connecting..."
-                  : bleConnected
-                    ? bleDeviceName ?? "Connected"
-                    : "Disconnected"}
-              </span>
-            </div>
-
-            {!bleConnected ? (
-              <button
-                onClick={connectBle}
-                disabled={bleConnecting}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#8b5cf6",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: bleConnecting ? "wait" : "pointer",
-                  fontSize: "0.875rem",
-                  opacity: bleConnecting ? 0.7 : 1,
-                }}
-              >
-                {bleConnecting ? "Connecting..." : "Connect HRM"}
-              </button>
-            ) : (
-              <button
-                onClick={disconnectBle}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#ef4444",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Disconnect
-              </button>
-            )}
-
-            {bleError && (
-              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                {bleError}
-              </p>
-            )}
-
-            {/* BLE HRM Metrics */}
-            {bleConnected && (
-              <div
-                style={{
-                  marginTop: "1rem",
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.5rem",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
-                    {bleHeartRate ?? "--"}
-                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> BPM</span>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>RMSSD</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#8b5cf6" }}>
-                    {hrvMetrics?.rmssd?.toFixed(0) ?? "--"}
-                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> ms</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Right Column - Metrics Display */}
