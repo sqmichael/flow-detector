@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
 import { useWatchStream } from "@/hooks/use-watch-stream";
 import { useCalibration } from "@/hooks/use-calibration";
+import { useBiometricLog } from "@/hooks/use-biometric-log";
 import {
   calculateCombinedFlow,
   updateFlowDetector,
@@ -13,7 +14,8 @@ import {
 } from "@/lib/biometrics/flow-calculator";
 import { formatCalibrationDate } from "@/lib/calibration/storage";
 import { CalibrationOverlay } from "@/components/calibration/CalibrationOverlay";
-import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
+import FlowEndPrompt from "@/components/FlowEndPrompt";
+import type { CombinedFlowMetrics, WatchMessage } from "@/lib/biometrics/types";
 
 export default function Home() {
   const { state: cameraState, videoRef, startStream, stopStream } = useCameraStream();
@@ -24,6 +26,46 @@ export default function Home() {
   const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
   const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
 
+  // Biometric logging (IndexedDB + JSONL export)
+  const {
+    logHR,
+    logEDA,
+    logFlow,
+    logMarker,
+    logAnnotation,
+    downloadSession,
+    eventCount,
+  } = useBiometricLog();
+
+  // Marker toast state
+  const [markerToast, setMarkerToast] = useState<{ visible: boolean; showInput: boolean; tag: string }>({
+    visible: false,
+    showInput: false,
+    tag: "",
+  });
+  const markerToastTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const markerInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Post-flow prompt state
+  const [flowEndPrompt, setFlowEndPrompt] = useState<{
+    visible: boolean;
+    startTime: number;
+    endTime: number;
+  } | null>(null);
+  const prevInFlowRef = useRef(false);
+
+  // Watch message handler for logging
+  const handleWatchMessage = useCallback(
+    (msg: WatchMessage) => {
+      if (msg.type === "hr") {
+        logHR(msg.bpm, msg.ibi, null, null);
+      } else if (msg.type === "eda") {
+        logEDA(msg.scl);
+      }
+    },
+    [logHR, logEDA]
+  );
+
   // Galaxy Watch stream (HR + IBI + EDA via relay server)
   const {
     isRelayConnected,
@@ -33,7 +75,7 @@ export default function Home() {
     hrvMetrics: watchStreamHrvMetrics,
     currentSCL,
     error: watchStreamError,
-  } = useWatchStream();
+  } = useWatchStream({ onMessage: handleWatchMessage });
 
   // Keep HRV metrics in a ref for the calibration getter (avoids stale closures)
   const hrvMetricsRef = useRef(watchStreamHrvMetrics);
@@ -82,6 +124,14 @@ export default function Home() {
       flowDetectorRef.current = newFlowState;
       setFlowState(newFlowState);
 
+      // Log flow score to IndexedDB
+      const tier = combined.hasEdaData
+        ? "eye+hrv+eda"
+        : combined.hasWatchData
+          ? "eye+hrv"
+          : "eye-only";
+      logFlow(combined.combinedFlowScore, newFlowState.smoothedScore, tier, newFlowState.inFlow);
+
       // Store in history with smoothed score
       const smoothedCombined = {
         ...combined,
@@ -89,7 +139,7 @@ export default function Home() {
       };
       setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
     },
-    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData]
+    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData, logFlow]
   );
 
   const { state: trackingState, metrics } = useEyeTracking({
@@ -156,6 +206,62 @@ export default function Home() {
     setIsTracking(true); // resume eye tracking with new calibration
   };
 
+  // Detect flow end: inFlow transitions true → false
+  useEffect(() => {
+    const wasInFlow = prevInFlowRef.current;
+    prevInFlowRef.current = flowState.inFlow;
+
+    if (wasInFlow && !flowState.inFlow && flowState.flowOnsetTime) {
+      setFlowEndPrompt({
+        visible: true,
+        startTime: flowState.flowOnsetTime,
+        endTime: Date.now(),
+      });
+    }
+  }, [flowState.inFlow, flowState.flowOnsetTime]);
+
+  // Keyboard shortcut: M for marker
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if typing in an input/textarea
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        // Log marker immediately (tag can be added via toast)
+        logMarker();
+        setMarkerToast({ visible: true, showInput: true, tag: "" });
+
+        // Clear any existing timer
+        if (markerToastTimerRef.current) clearTimeout(markerToastTimerRef.current);
+
+        // Auto-dismiss after 3 seconds
+        markerToastTimerRef.current = setTimeout(() => {
+          setMarkerToast((prev) => ({ ...prev, visible: false }));
+        }, 3000);
+
+        // Focus the input on next tick
+        setTimeout(() => markerInputRef.current?.focus(), 50);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [logMarker]);
+
+  const handleMarkerTag = (tag: string) => {
+    if (tag.trim()) {
+      // Log another marker with the tag (the tagless one was already logged on keypress)
+      logMarker(tag.trim());
+    }
+    setMarkerToast({ visible: false, showInput: false, tag: "" });
+    if (markerToastTimerRef.current) {
+      clearTimeout(markerToastTimerRef.current);
+      markerToastTimerRef.current = null;
+    }
+  };
+
   const getFlowColor = (value: number) => {
     if (value >= 0.7) return "#22c55e";
     if (value >= 0.5) return "#eab308";
@@ -174,6 +280,64 @@ export default function Home() {
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
       {/* Calibration Overlay */}
       <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} onDone={handleCalibrationDone} />
+
+      {/* Post-flow confirmation prompt */}
+      {flowEndPrompt?.visible && (
+        <FlowEndPrompt
+          startTime={flowEndPrompt.startTime}
+          endTime={flowEndPrompt.endTime}
+          onLabel={(label) => {
+            logAnnotation(label, flowEndPrompt.startTime, flowEndPrompt.endTime);
+            setFlowEndPrompt(null);
+          }}
+          onDismiss={() => setFlowEndPrompt(null)}
+        />
+      )}
+
+      {/* Marker toast */}
+      {markerToast.visible && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: "2rem",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 1000,
+            backgroundColor: "rgba(30, 30, 40, 0.95)",
+            border: "1px solid rgba(59, 130, 246, 0.4)",
+            borderRadius: "10px",
+            padding: "0.75rem 1.25rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <span style={{ color: "#3b82f6", fontSize: "0.9rem" }}>Marker logged</span>
+          {markerToast.showInput && (
+            <input
+              ref={markerInputRef}
+              type="text"
+              placeholder="Add tag (Enter to save)"
+              style={{
+                backgroundColor: "transparent",
+                border: "1px solid #444",
+                borderRadius: "4px",
+                padding: "0.3rem 0.5rem",
+                color: "#ccc",
+                fontSize: "0.85rem",
+                outline: "none",
+                width: "160px",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleMarkerTag((e.target as HTMLInputElement).value);
+                if (e.key === "Escape") setMarkerToast({ visible: false, showInput: false, tag: "" });
+              }}
+            />
+          )}
+        </div>
+      )}
 
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
@@ -274,6 +438,61 @@ export default function Home() {
               }}
             >
               {hasCalibration ? "Recalibrate" : "Calibrate"}
+            </button>
+          </div>
+
+          {/* Logging Controls */}
+          <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <button
+              onClick={() => {
+                logMarker();
+                setMarkerToast({ visible: true, showInput: true, tag: "" });
+                if (markerToastTimerRef.current) clearTimeout(markerToastTimerRef.current);
+                markerToastTimerRef.current = setTimeout(() => {
+                  setMarkerToast((prev) => ({ ...prev, visible: false }));
+                }, 3000);
+                setTimeout(() => markerInputRef.current?.focus(), 50);
+              }}
+              style={{
+                padding: "0.5rem 1rem",
+                fontSize: "0.85rem",
+                backgroundColor: "#374151",
+                color: "#ccc",
+                border: "1px solid #555",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+              title="Drop a marker (keyboard: M)"
+            >
+              Marker (M)
+            </button>
+            <button
+              onClick={downloadSession}
+              style={{
+                padding: "0.5rem 1rem",
+                fontSize: "0.85rem",
+                backgroundColor: "#374151",
+                color: "#ccc",
+                border: "1px solid #555",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              Download Log
+              {eventCount > 0 && (
+                <span
+                  style={{
+                    marginLeft: "0.5rem",
+                    backgroundColor: "#3b82f6",
+                    color: "#fff",
+                    borderRadius: "9999px",
+                    padding: "0.1rem 0.4rem",
+                    fontSize: "0.7rem",
+                  }}
+                >
+                  {eventCount}
+                </span>
+              )}
             </button>
           </div>
 

@@ -69,7 +69,12 @@ export interface UseWatchStreamReturn extends WatchStreamState {
   disconnect: () => void;
 }
 
-export function useWatchStream(): UseWatchStreamReturn {
+export interface WatchStreamOptions {
+  /** Called after each parsed watch message (for logging, etc.) */
+  onMessage?: (msg: WatchMessage) => void;
+}
+
+export function useWatchStream(options?: WatchStreamOptions): UseWatchStreamReturn {
   const [state, setState] = useState<WatchStreamState>({
     isRelayConnected: false,
     isWatchConnected: false,
@@ -181,7 +186,10 @@ export function useWatchStream(): UseWatchStreamReturn {
       default:
         log("Unknown message type:", (msg as { type: string }).type);
     }
-  }, []);
+
+    // Notify listener (for logging, etc.)
+    options?.onMessage?.(msg);
+  }, [options]);
 
   const scheduleReconnect = useCallback(() => {
     if (intentionalCloseRef.current) return;
