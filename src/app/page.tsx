@@ -3,8 +3,6 @@
 import { useState, useMemo, useRef, useCallback } from "react";
 import { useCameraStream } from "@/hooks/use-camera-stream";
 import { useEyeTracking } from "@/hooks/use-eye-tracking";
-import { usePulsoid } from "@/hooks/use-pulsoid";
-import { useBleHrm } from "@/hooks/use-ble-hrm";
 import { useWatchStream } from "@/hooks/use-watch-stream";
 import { useCalibration } from "@/hooks/use-calibration";
 import {
@@ -17,9 +15,6 @@ import { formatCalibrationDate } from "@/lib/calibration/storage";
 import { CalibrationOverlay } from "@/components/calibration/CalibrationOverlay";
 import type { CombinedFlowMetrics } from "@/lib/biometrics/types";
 
-// Your Pulsoid token - in production, this would be in env vars
-const PULSOID_TOKEN = "d844e5e9-2b04-4597-9d57-979904a40dff";
-
 export default function Home() {
   const { state: cameraState, videoRef, startStream, stopStream } = useCameraStream();
   const [isTracking, setIsTracking] = useState(false);
@@ -28,19 +23,6 @@ export default function Home() {
   // Flow detector state for EMA smoothing
   const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
   const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
-
-  // BLE Heart Rate Monitor
-  const {
-    isConnected: bleConnected,
-    isConnecting: bleConnecting,
-    deviceName: bleDeviceName,
-    heartRate: bleHeartRate,
-    latestIBI,
-    hrvMetrics,
-    error: bleError,
-    connect: connectBle,
-    disconnect: disconnectBle,
-  } = useBleHrm();
 
   // Galaxy Watch stream (HR + IBI + EDA via relay server)
   const {
@@ -54,8 +36,8 @@ export default function Home() {
   } = useWatchStream();
 
   // Keep HRV metrics in a ref for the calibration getter (avoids stale closures)
-  const hrvMetricsRef = useRef(hrvMetrics);
-  hrvMetricsRef.current = hrvMetrics;
+  const hrvMetricsRef = useRef(watchStreamHrvMetrics);
+  hrvMetricsRef.current = watchStreamHrvMetrics;
 
   // Calibration
   const {
@@ -74,27 +56,10 @@ export default function Home() {
     getHrvMetrics: () => hrvMetricsRef.current,
   });
 
-  // Pulsoid connection for heart rate (fallback)
-  const {
-    isConnected: watchConnected,
-    heartRate,
-    error: watchError,
-    connect: connectPulsoid,
-    disconnect: disconnectPulsoid,
-  } = usePulsoid();
-
-  // Data source priority: Watch Stream > BLE HRM > Pulsoid
-  const effectiveHeartRate = watchStreamConnected
-    ? watchStreamHeartRate
-    : bleConnected
-      ? bleHeartRate
-      : heartRate;
-  const effectiveHrvMetrics = watchStreamConnected
-    ? watchStreamHrvMetrics
-    : bleConnected
-      ? hrvMetrics
-      : null;
-  const effectiveEDA = watchStreamConnected ? currentSCL : null;
+  // Galaxy Watch is the sole cardiac/EDA source
+  const effectiveHeartRate = watchStreamHeartRate;
+  const effectiveHrvMetrics = watchStreamHrvMetrics;
+  const effectiveEDA = currentSCL;
 
   // Callback to handle new metrics with EMA smoothing
   const handleMetrics = useCallback(
@@ -180,10 +145,15 @@ export default function Home() {
 
   const handleCancelCalibration = () => {
     cancelCalibration();
+    // Resume tracking if camera is still running
+    if (cameraState.stream) {
+      setIsTracking(true);
+    }
   };
 
-  const handleWatchConnect = () => {
-    connectPulsoid(PULSOID_TOKEN);
+  const handleCalibrationDone = () => {
+    cancelCalibration(); // resets to idle, hides overlay
+    setIsTracking(true); // resume eye tracking with new calibration
   };
 
   const getFlowColor = (value: number) => {
@@ -203,7 +173,7 @@ export default function Home() {
   return (
     <main style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
       {/* Calibration Overlay */}
-      <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} />
+      <CalibrationOverlay state={calibrationState} onCancel={handleCancelCalibration} onDone={handleCalibrationDone} />
 
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
@@ -471,233 +441,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Pulsoid Connection Panel (fallback) */}
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              backgroundColor: "#1a1a1a",
-              borderRadius: "12px",
-              border: "1px solid #333",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <span style={{ fontWeight: "bold" }}>Pulsoid (Fallback)</span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  fontSize: "0.875rem",
-                  color: watchConnected ? "#22c55e" : "#888",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: watchConnected ? "#22c55e" : "#666",
-                  }}
-                />
-                {watchConnected ? "Connected" : "Disconnected"}
-              </span>
-            </div>
-
-            {!watchConnected ? (
-              <button
-                onClick={handleWatchConnect}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#3b82f6",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Connect to Pulsoid
-              </button>
-            ) : (
-              <button
-                onClick={disconnectPulsoid}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#ef4444",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Disconnect
-              </button>
-            )}
-
-            {watchError && (
-              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                {watchError}
-              </p>
-            )}
-
-            {/* Pulsoid Metrics */}
-            {watchConnected && (
-              <div
-                style={{
-                  marginTop: "1rem",
-                  padding: "0.75rem",
-                  backgroundColor: "#0a0a0a",
-                  borderRadius: "8px",
-                  textAlign: "center",
-                }}
-              >
-                <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
-                <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#ef4444" }}>
-                  {heartRate ?? "--"}
-                  <span style={{ fontSize: "1rem", fontWeight: "normal" }}> BPM</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* BLE HRM Connection Panel */}
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1rem",
-              backgroundColor: "#1a1a1a",
-              borderRadius: "12px",
-              border: bleConnected ? "1px solid #8b5cf6" : "1px solid #333",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <span style={{ fontWeight: "bold" }}>BLE Heart Rate Monitor</span>
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  fontSize: "0.875rem",
-                  color: bleConnected ? "#8b5cf6" : "#888",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: bleConnected ? "#8b5cf6" : "#666",
-                  }}
-                />
-                {bleConnecting
-                  ? "Connecting..."
-                  : bleConnected
-                    ? bleDeviceName ?? "Connected"
-                    : "Disconnected"}
-              </span>
-            </div>
-
-            {!bleConnected ? (
-              <button
-                onClick={connectBle}
-                disabled={bleConnecting}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#8b5cf6",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: bleConnecting ? "wait" : "pointer",
-                  fontSize: "0.875rem",
-                  opacity: bleConnecting ? 0.7 : 1,
-                }}
-              >
-                {bleConnecting ? "Connecting..." : "Connect HRM"}
-              </button>
-            ) : (
-              <button
-                onClick={disconnectBle}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 1rem",
-                  backgroundColor: "#ef4444",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                }}
-              >
-                Disconnect
-              </button>
-            )}
-
-            {bleError && (
-              <p style={{ color: "#ef4444", fontSize: "0.75rem", marginTop: "0.5rem" }}>
-                {bleError}
-              </p>
-            )}
-
-            {/* BLE HRM Metrics */}
-            {bleConnected && (
-              <div
-                style={{
-                  marginTop: "1rem",
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "0.5rem",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>Heart Rate</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#ef4444" }}>
-                    {bleHeartRate ?? "--"}
-                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> BPM</span>
-                  </div>
-                </div>
-                <div
-                  style={{
-                    padding: "0.75rem",
-                    backgroundColor: "#0a0a0a",
-                    borderRadius: "8px",
-                    textAlign: "center",
-                  }}
-                >
-                  <div style={{ fontSize: "0.75rem", color: "#888" }}>RMSSD</div>
-                  <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#8b5cf6" }}>
-                    {hrvMetrics?.rmssd?.toFixed(0) ?? "--"}
-                    <span style={{ fontSize: "0.75rem", fontWeight: "normal" }}> ms</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* Right Column - Metrics Display */}

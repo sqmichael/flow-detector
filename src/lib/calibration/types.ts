@@ -109,6 +109,7 @@ export interface CalibrationData {
  */
 export type CalibrationStep =
   | "idle"
+  | "initializing"
   | "baseline"
   | "blink"
   | "gaze-center"
@@ -133,7 +134,7 @@ export interface CalibrationStepConfig {
  * Calibration step configurations
  */
 export const CALIBRATION_STEPS: Record<
-  Exclude<CalibrationStep, "idle" | "complete">,
+  Exclude<CalibrationStep, "idle" | "initializing" | "complete">,
   CalibrationStepConfig
 > = {
   baseline: {
@@ -143,7 +144,7 @@ export const CALIBRATION_STEPS: Record<
   },
   blink: {
     blinksRequired: 5,
-    instruction: "Blink naturally 5 times. Take your time.",
+    instruction: "Focus on the dot and blink naturally 5 times.",
     nextStep: "gaze-center",
   },
   "gaze-center": {
