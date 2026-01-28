@@ -159,9 +159,9 @@ function handleBrowserConnection(ws: WebSocket) {
   });
 }
 
-httpServer.listen(PORT, () => {
-  log(`Listening on ws://localhost:${PORT}`);
-  log(`  Watch:   ws://localhost:${PORT}/watch`);
+httpServer.listen(PORT, "0.0.0.0", () => {
+  log(`Listening on ws://0.0.0.0:${PORT}`);
+  log(`  Watch:   ws://<your-ip>:${PORT}/watch`);
   log(`  Browser: ws://localhost:${PORT}/browser`);
   log(`  Verbose: ${VERBOSE ? "ON" : "OFF (use --verbose)"}`);
 });
