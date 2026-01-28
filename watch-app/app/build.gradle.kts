@@ -65,6 +65,9 @@ dependencies {
     // Wear input for RemoteInput
     implementation("androidx.wear:wear-input:1.2.0-alpha02")
 
+    // Ongoing Activity API — keeps service visible on watch face to prevent freeze
+    implementation("androidx.wear:wear-ongoing:1.1.0")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
