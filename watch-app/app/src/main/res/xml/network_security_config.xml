@@ -1,13 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext WebSocket (ws://) to local network targets.
-         The relay server runs on the developer's Mac over plain HTTP. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">192.168.0.0</domain>
-        <domain includeSubdomains="true">192.168.1.0</domain>
-    </domain-config>
-    <!-- Fallback: allow cleartext broadly for any LAN IP the user enters.
-         Safe because the app only connects to a user-specified relay server. -->
+    <!-- Allow cleartext WebSocket (ws://) to any user-specified relay server IP.
+         The app only connects to a single IP entered by the user in the UI. -->
     <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
