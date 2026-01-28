@@ -1,7 +1,6 @@
 package com.flowdetector.watch
 
 import android.Manifest
-import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -26,17 +25,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.*
-import androidx.wear.input.RemoteInputIntentHelper
-import android.app.RemoteInput as AndroidRemoteInput
 
 private const val TAG = "[WatchUI]"
 private const val PREFS_NAME = "flow_prefs"
 private const val KEY_SERVER_IP = "server_ip"
 private const val DEFAULT_IP = "10.0.2.2"
-private const val IP_INPUT_KEY = "ip_address"
 
 class MainActivity : ComponentActivity() {
 
@@ -106,46 +103,27 @@ fun FlowDetectorWatchApp(
     var ipAddress by remember {
         mutableStateOf(prefs.getString(KEY_SERVER_IP, DEFAULT_IP) ?: DEFAULT_IP)
     }
-    var permissionGranted by remember { mutableStateOf(false) }
-    
-    // Check initial permission state
+    var sensorPermissionGranted by remember { mutableStateOf(false) }
+    var showIpInput by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
-    val activity = context as ComponentActivity
-    
-    val permissionLauncher = rememberLauncherForActivityResult(
+
+    val sensorPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        permissionGranted = granted
+        sensorPermissionGranted = granted
     }
 
+    // Check sensor permission on launch
     LaunchedEffect(Unit) {
-        val permissionCheck = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, Manifest.permission.BODY_SENSORS
-        )
-        if (permissionCheck == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            permissionGranted = true
-        } else {
-            permissionLauncher.launch(Manifest.permission.BODY_SENSORS)
-        }
+        val sensorCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.BODY_SENSORS)
+        sensorPermissionGranted = (sensorCheck == android.content.pm.PackageManager.PERMISSION_GRANTED)
     }
 
     MaterialTheme {
-        if (permissionGranted) {
-            MainContent(
-                service = service,
-                ipAddress = ipAddress,
-                onIpAddressChanged = { newIp ->
-                    ipAddress = newIp
-                    prefs.edit().putString(KEY_SERVER_IP, newIp).apply()
-                },
-                onStartStreaming = onStartStreaming,
-                onStopStreaming = onStopStreaming
-            )
-        } else {
+        if (!sensorPermissionGranted) {
             PermissionRationale(
-                onRequestPermission = {
-                    permissionLauncher.launch(Manifest.permission.BODY_SENSORS)
-                },
+                onRequestPermission = { sensorPermissionLauncher.launch(Manifest.permission.BODY_SENSORS) },
                 onOpenSettings = {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                         data = Uri.fromParts("package", context.packageName, null)
@@ -154,254 +132,138 @@ fun FlowDetectorWatchApp(
                 }
             )
         }
+        else if (showIpInput) {
+            IpInputScreen(
+                initialIp = ipAddress,
+                onConfirm = { newIp ->
+                    if (isValidIp(newIp)) {
+                        ipAddress = newIp
+                        prefs.edit().putString(KEY_SERVER_IP, newIp).apply()
+                        showIpInput = false
+                    }
+                },
+                onCancel = { showIpInput = false }
+            )
+        }
+        else {
+            MainContent(
+                service = service,
+                ipAddress = ipAddress,
+                onEditIp = { showIpInput = true },
+                onStartStreaming = onStartStreaming,
+                onStopStreaming = onStopStreaming
+            )
+        }
     }
 }
 
 @Composable
-fun PermissionRationale(
-    onRequestPermission: () -> Unit,
-    onOpenSettings: () -> Unit
-) {
-    Scaffold(
-        timeText = { TimeText() }
-    ) {
+fun PermissionRationale(onRequestPermission: () -> Unit, onOpenSettings: () -> Unit) {
+    Scaffold(timeText = { TimeText() }) {
         ScalingLazyColumn(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            item {
-                Text(
-                    text = "Sensors Needed",
-                    style = MaterialTheme.typography.title2,
-                    textAlign = TextAlign.Center
-                )
-            }
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "This app requires body sensors access to detect flow states.",
-                    style = MaterialTheme.typography.body2,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            item {
-                Spacer(modifier = Modifier.height(16.dp))
-                Chip(
-                    onClick = onRequestPermission,
-                    label = { Text("Grant Permission") },
-                    colors = ChipDefaults.primaryChipColors()
-                )
-            }
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                CompactChip(
-                    onClick = onOpenSettings,
-                    label = { Text("Open Settings") },
-                    colors = ChipDefaults.secondaryChipColors()
-                )
-            }
+            item { Text("Sensors Needed", style = MaterialTheme.typography.title2, textAlign = TextAlign.Center) }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { Text("This app requires body sensors access for continuous data streaming.", style = MaterialTheme.typography.body2, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp)) }
+            item { Spacer(modifier = Modifier.height(16.dp)) }
+            item { Chip(onClick = onRequestPermission, label = { Text("Grant Permission") }, colors = ChipDefaults.primaryChipColors()) }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { CompactChip(onClick = onOpenSettings, label = { Text("Open App Settings") }, colors = ChipDefaults.secondaryChipColors()) }
         }
     }
+}
+
+@Composable
+fun IpInputScreen(initialIp: String, onConfirm: (String) -> Unit, onCancel: () -> Unit) {
+    var currentIp by remember { mutableStateOf(initialIp) }
+
+    Scaffold(timeText = { TimeText() }, vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) }) {
+        ScalingLazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+            contentPadding = PaddingValues(top = 24.dp, bottom = 24.dp)
+        ) {
+            item { Text(text = currentIp.ifBlank { "Enter IP" }, style = MaterialTheme.typography.title3, modifier = Modifier.padding(bottom = 8.dp)) }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton("1") { currentIp += "1" }; NumberButton("2") { currentIp += "2" }; NumberButton("3") { currentIp += "3" } } }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton("4") { currentIp += "4" }; NumberButton("5") { currentIp += "5" }; NumberButton("6") { currentIp += "6" } } }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton("7") { currentIp += "7" }; NumberButton("8") { currentIp += "8" }; NumberButton("9") { currentIp += "9" } } }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton(".") { if (!currentIp.endsWith(".")) currentIp += "." }; NumberButton("0") { currentIp += "0" }; Button(onClick = { if (currentIp.isNotEmpty()) currentIp = currentIp.dropLast(1) }, modifier = Modifier.size(48.dp)) { Text("<-") } } }
+            item { Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { Button(onClick = onCancel, colors = ButtonDefaults.secondaryButtonColors(), modifier = Modifier.size(48.dp)) { Text("X") }; Spacer(Modifier.width(16.dp)); Button(onClick = { onConfirm(currentIp) }, enabled = isValidIp(currentIp), modifier = Modifier.size(48.dp)) { Text("OK") } } }
+        }
+    }
+}
+
+@Composable
+fun NumberButton(number: String, onClick: () -> Unit) {
+    Button(onClick = onClick, modifier = Modifier.size(48.dp)) { Text(number, style = MaterialTheme.typography.title3) }
 }
 
 @Composable
 fun MainContent(
     service: SensorService?,
     ipAddress: String,
-    onIpAddressChanged: (String) -> Unit,
+    onEditIp: () -> Unit,
     onStartStreaming: (String) -> Unit,
     onStopStreaming: () -> Unit
 ) {
-    // Observe service state
     val heartRate by service?.heartRate?.collectAsState() ?: remember { mutableStateOf(null) }
     val isConnected by service?.isConnected?.collectAsState() ?: remember { mutableStateOf(false) }
     val isStreaming by service?.isStreaming?.collectAsState() ?: remember { mutableStateOf(false) }
     val error by service?.connectionError?.collectAsState() ?: remember { mutableStateOf(null) }
-
     var isConnecting by remember { mutableStateOf(false) }
     var ipError by remember { mutableStateOf<String?>(null) }
-    
-    // Reset connecting state when connected or error occurs
-    LaunchedEffect(isConnected, error) {
-        if (isConnected || error != null) {
-            isConnecting = false
-        }
-    }
+
+    LaunchedEffect(isConnected, error) { if (isConnected || error != null) isConnecting = false }
 
     val listState = rememberScalingLazyListState()
 
-    // IP input result handler
-    val ipInputLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val results = result.data?.let { RemoteInput.getResultsFromIntent(it) }
-        val newIp = results?.getCharSequence(IP_INPUT_KEY)?.toString()
-        if (!newIp.isNullOrBlank()) {
-            onIpAddressChanged(newIp)
-            ipError = null // Clear error on new input
-        }
-    }
-
-    Scaffold(
-        timeText = { TimeText() },
-        positionIndicator = { PositionIndicator(scalingLazyListState = listState) }
-    ) {
+    Scaffold(timeText = { TimeText() }, positionIndicator = { PositionIndicator(scalingLazyListState = listState) }) {
         ScalingLazyColumn(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             state = listState
         ) {
-            // Header / Status
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(
-                                when {
-                                    isConnected -> Color.Green
-                                    isConnecting -> Color.Yellow
-                                    else -> Color.Red
-                                },
-                                CircleShape
-                            )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = when {
-                            isConnected -> "Connected"
-                            isConnecting -> "Connecting..."
-                            else -> "Disconnected"
-                        },
-                        style = MaterialTheme.typography.caption2,
-                        color = if (isConnected) Color.Green else Color.Gray
-                    )
-                }
-            }
-
-            // Heart Rate
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = heartRate?.toString() ?: "--",
-                        style = MaterialTheme.typography.display1,
-                        color = if (heartRate != null) MaterialTheme.colors.primary else Color.Gray
-                    )
-                    Text(
-                        text = "BPM",
-                        style = MaterialTheme.typography.caption1,
-                        color = Color.Gray
-                    )
-                }
-            }
-
-            // Server IP Section
-            item {
-                Spacer(modifier = Modifier.height(12.dp))
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Server IP:",
-                        style = MaterialTheme.typography.caption2,
-                        color = Color.LightGray
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    
-                    Chip(
-                        onClick = {
-                            val remoteInputs = listOf(
-                                AndroidRemoteInput.Builder(IP_INPUT_KEY)
-                                    .setLabel("Server IP")
-                                    .build()
-                            )
-                            val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
-                            RemoteInputIntentHelper.putRemoteInputsExtra(intent, remoteInputs)
-                            ipInputLauncher.launch(intent)
-                        },
-                        label = { 
-                            Text(
-                                text = ipAddress,
-                                style = MaterialTheme.typography.body2,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth()
-                            ) 
-                        },
-                        colors = ChipDefaults.secondaryChipColors(),
-                        modifier = Modifier.height(40.dp)
-                    )
-                    
-                    if (ipError != null) {
-                        Text(
-                            text = ipError!!,
-                            style = MaterialTheme.typography.caption2,
-                            color = MaterialTheme.colors.error,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            // Connect Button
-            item {
-                Spacer(modifier = Modifier.height(12.dp))
+            item { Row(verticalAlignment = Alignment.CenterVertically) { Box(modifier = Modifier.size(10.dp).background(if (isConnected) Color.Green else Color.Red, CircleShape)); Spacer(modifier = Modifier.width(6.dp)); Text(if (isConnected) "Connected" else "Disconnected", style = MaterialTheme.typography.caption2, color = if (isConnected) Color.Green else Color.Gray) } }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(text = heartRate?.toString() ?: "--", style = MaterialTheme.typography.display1, color = Color.Red); Text(text = "BPM", style = MaterialTheme.typography.caption1, color = Color.Gray) } }
+            item { Spacer(modifier = Modifier.height(4.dp)) }
+            item { Text(text = ipAddress, style = MaterialTheme.typography.caption2, color = Color.Gray, textAlign = TextAlign.Center); Spacer(modifier = Modifier.height(4.dp)); CompactChip(onClick = onEditIp, label = { Text("Edit IP") }) }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { 
                 Button(
-                    onClick = {
+                    onClick = { 
                         if (isConnected || isStreaming) {
                             onStopStreaming()
                         } else {
                             if (!isValidIp(ipAddress)) {
-                                ipError = "Invalid IP Format"
+                                ipError = "Invalid IP"
                                 return@Button
                             }
                             ipError = null
                             isConnecting = true
-                            val url = "ws://$ipAddress:8765/watch"
-                            onStartStreaming(url)
+                            onStartStreaming("ws://$ipAddress:8765/watch")
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(0.9f),
-                    enabled = !isConnecting || isConnected // Allow disconnect if connected
-                ) {
-                    if (isConnecting && !isConnected) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            indicatorColor = MaterialTheme.colors.onPrimary
-                        )
-                    } else {
-                        Text(if (isConnected || isStreaming) "Disconnect" else "Connect")
-                    }
+                    }, 
+                    modifier = Modifier.fillMaxWidth(0.8f), 
+                    enabled = !isConnecting
+                ) { 
+                    Text(if (isConnected || isStreaming) "Disconnect" else "Connect") 
                 }
             }
-
-            // General Errors
-            if (error != null) {
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = error ?: "",
-                        color = if (error?.contains("EDA") == true) Color.Yellow else MaterialTheme.colors.error,
-                        style = MaterialTheme.typography.caption2,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                }
-            }
+            val displayError = ipError ?: error
+            if (displayError != null) { item { Spacer(modifier = Modifier.height(4.dp)); Text(text = displayError, color = Color.Red, style = MaterialTheme.typography.caption2, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp)) } }
         }
     }
 }
 
 private fun isValidIp(ip: String): Boolean {
-    val parts = ip.split(".")
+    if (ip.endsWith(".")) return false
+    val parts = ip.split('.')
     if (parts.size != 4) return false
-    return parts.all { part ->
-        val num = part.toIntOrNull() ?: return false
-        num in 0..255
-    }
+    return parts.all { part -> if (part.isEmpty()) return@all false; part.toIntOrNull()?.let { it in 0..255 } ?: false }
 }

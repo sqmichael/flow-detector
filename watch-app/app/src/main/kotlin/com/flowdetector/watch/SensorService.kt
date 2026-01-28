@@ -225,11 +225,12 @@ class SensorService : LifecycleService() {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
             lifecycleScope.launch {
                 for (dp in dataPoints) {
-                    val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
-                    if (dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS) != 1) continue
+                    val hr: Int = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
+                    val hrStatus: Int = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
+                    if (hrStatus != 1) continue
 
-                    val ibiList = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
-                    val ibiStatusList = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
+                    val ibiList: List<Int> = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
+                    val ibiStatusList: List<Int> = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
                     var lastValidIbi: Int? = null
                     for (i in ibiList.indices) {
                         if (ibiStatusList[i] == 0 && ibiList[i] != 0) {
@@ -237,7 +238,12 @@ class SensorService : LifecycleService() {
                         }
                     }
 
-                    val message = HeartRateMessage(hr, lastValidIbi, 100, System.currentTimeMillis())
+                    val message = HeartRateMessage(
+                        bpm = hr,
+                        ibi = lastValidIbi,
+                        quality = 100,
+                        timestamp = System.currentTimeMillis()
+                    )
                     webSocketManager.send(message.toJson())
 
                     _heartRate.value = hr
@@ -256,13 +262,16 @@ class SensorService : LifecycleService() {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
             lifecycleScope.launch {
                 for (dp in dataPoints) {
-                    val scl = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE) ?: continue
-                    val status = dp.getValue(ValueKey.EdaSet.STATUS) ?: continue
+                    val scl: Float = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE) ?: continue
+                    val status: Int = dp.getValue(ValueKey.EdaSet.STATUS) ?: continue
 
                     // Only send valid EDA readings (status 0 = valid)
                     if (status != 0) continue
 
-                    val message = EdaMessage(scl, System.currentTimeMillis())
+                    val message = EdaMessage(
+                        scl = scl,
+                        timestamp = System.currentTimeMillis()
+                    )
                     webSocketManager.send(message.toJson())
 
                     _currentScl.value = scl
@@ -314,17 +323,17 @@ class SensorService : LifecycleService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Flow Detector")
             .setContentText("Streaming HR & EDA...")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_WORKOUT)
-            .build()
 
         // Ongoing Activity ties the notification to the watch face and launcher,
         // signaling to Samsung's resource manager that this is an active task.
-        val ongoingActivity = OngoingActivity.Builder(this, NOTIFICATION_ID, notification)
+        // Must be applied BEFORE building the notification.
+        val ongoingActivity = OngoingActivity.Builder(this, NOTIFICATION_ID, notificationBuilder)
             .setStaticIcon(android.R.drawable.ic_menu_mylocation)
             .setTouchIntent(tapIntent)
             .setStatus(
@@ -336,6 +345,6 @@ class SensorService : LifecycleService() {
 
         ongoingActivity.apply(this)
 
-        return notification
+        return notificationBuilder.build()
     }
 }
