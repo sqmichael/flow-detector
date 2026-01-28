@@ -7,15 +7,21 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "watch-server": "npx tsx server/watch-relay.ts"
+    "watch-server": "npx tsx server/watch-relay.ts",
+    "call-service": "npx tsx server/calling/call-service.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
     "next": "^16.1.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "twilio": "^5.4.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
     "@types/node": "^20.17.12",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

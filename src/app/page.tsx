@@ -6,6 +6,7 @@ import { useEyeTracking } from "@/hooks/use-eye-tracking";
 import { useWatchStream } from "@/hooks/use-watch-stream";
 import { useCalibration } from "@/hooks/use-calibration";
 import { useBiometricLog } from "@/hooks/use-biometric-log";
+import { useCallTrigger } from "@/hooks/use-call-trigger";
 import {
   calculateCombinedFlow,
   updateFlowDetector,
@@ -45,6 +46,15 @@ export default function Home() {
   });
   const markerToastTimerRef = useRef<NodeJS.Timeout | null>(null);
   const markerInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Call trigger hook
+  const { triggerCall, isCalling, lastError: callError } = useCallTrigger();
+  const [callToast, setCallToast] = useState<{ visible: boolean; message: string; isError: boolean }>({
+    visible: false,
+    message: "",
+    isError: false,
+  });
+  const callToastTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Post-flow prompt state
   const [flowEndPrompt, setFlowEndPrompt] = useState<{
@@ -262,6 +272,32 @@ export default function Home() {
     }
   };
 
+  const handleCallMe = async () => {
+    const result = await triggerCall({ reason: 'user_requested' });
+
+    // Clear any existing timer
+    if (callToastTimerRef.current) clearTimeout(callToastTimerRef.current);
+
+    if (result.success) {
+      setCallToast({
+        visible: true,
+        message: "Calling you now...",
+        isError: false,
+      });
+    } else {
+      setCallToast({
+        visible: true,
+        message: result.error || "Call failed. Is the call service running?",
+        isError: true,
+      });
+    }
+
+    // Auto-dismiss after 4 seconds
+    callToastTimerRef.current = setTimeout(() => {
+      setCallToast((prev) => ({ ...prev, visible: false }));
+    }, 4000);
+  };
+
   const getFlowColor = (value: number) => {
     if (value >= 0.7) return "#22c55e";
     if (value >= 0.5) return "#eab308";
@@ -338,6 +374,57 @@ export default function Home() {
           )}
         </div>
       )}
+
+      {/* Call toast */}
+      {callToast.visible && (
+        <div
+          style={{
+            position: "fixed",
+            top: "2rem",
+            right: "2rem",
+            zIndex: 1000,
+            backgroundColor: "rgba(30, 30, 40, 0.95)",
+            border: callToast.isError ? "1px solid rgba(239, 68, 68, 0.4)" : "1px solid rgba(34, 197, 94, 0.4)",
+            borderRadius: "10px",
+            padding: "0.75rem 1.25rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <span style={{ color: callToast.isError ? "#ef4444" : "#22c55e", fontSize: "0.9rem" }}>
+            {callToast.message}
+          </span>
+        </div>
+      )}
+
+      {/* Call Me button (top-right corner) */}
+      <button
+        onClick={handleCallMe}
+        disabled={isCalling}
+        style={{
+          position: "fixed",
+          top: "1rem",
+          right: "1rem",
+          zIndex: 999,
+          padding: "0.75rem 1.5rem",
+          fontSize: "0.95rem",
+          fontWeight: 600,
+          backgroundColor: isCalling ? "#666" : "#8b5cf6",
+          color: "#fff",
+          border: "none",
+          borderRadius: "8px",
+          cursor: isCalling ? "wait" : "pointer",
+          opacity: isCalling ? 0.7 : 1,
+          boxShadow: "0 2px 8px rgba(0, 0, 0, 0.3)",
+          transition: "all 0.2s",
+        }}
+        title="Trigger a call from the Ambient Empathic Agent"
+      >
+        {isCalling ? "Calling..." : "📞 Call Me"}
+      </button>
 
       <h1 style={{ fontSize: "2rem", marginBottom: "0.5rem" }}>Flow Detector</h1>
       <p style={{ color: "#888", marginBottom: "2rem" }}>
