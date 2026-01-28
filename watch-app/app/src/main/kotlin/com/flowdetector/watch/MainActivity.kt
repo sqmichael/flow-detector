@@ -211,6 +211,7 @@ fun MainContent(
     onStopStreaming: () -> Unit
 ) {
     val heartRate by service?.heartRate?.collectAsState() ?: remember { mutableStateOf(null) }
+    val currentScl by service?.currentScl?.collectAsState() ?: remember { mutableStateOf(null) }
     val isConnected by service?.isConnected?.collectAsState() ?: remember { mutableStateOf(false) }
     val isStreaming by service?.isStreaming?.collectAsState() ?: remember { mutableStateOf(false) }
     val error by service?.connectionError?.collectAsState() ?: remember { mutableStateOf(null) }
@@ -231,6 +232,8 @@ fun MainContent(
             item { Row(verticalAlignment = Alignment.CenterVertically) { Box(modifier = Modifier.size(10.dp).background(if (isConnected) Color.Green else Color.Red, CircleShape)); Spacer(modifier = Modifier.width(6.dp)); Text(if (isConnected) "Connected" else "Disconnected", style = MaterialTheme.typography.caption2, color = if (isConnected) Color.Green else Color.Gray) } }
             item { Spacer(modifier = Modifier.height(8.dp)) }
             item { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(text = heartRate?.toString() ?: "--", style = MaterialTheme.typography.display1, color = Color.Red); Text(text = "BPM", style = MaterialTheme.typography.caption1, color = Color.Gray) } }
+            item { Spacer(modifier = Modifier.height(2.dp)) }
+            item { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(text = currentScl?.let { String.format("%.2f", it) } ?: "--", style = MaterialTheme.typography.title2, color = Color(0xFF4FC3F7)); Text(text = "SCL (\u00B5S)", style = MaterialTheme.typography.caption1, color = Color.Gray) } }
             item { Spacer(modifier = Modifier.height(4.dp)) }
             item { Text(text = ipAddress, style = MaterialTheme.typography.caption2, color = Color.Gray, textAlign = TextAlign.Center); Spacer(modifier = Modifier.height(4.dp)); CompactChip(onClick = onEditIp, label = { Text("Edit IP") }) }
             item { Spacer(modifier = Modifier.height(8.dp)) }

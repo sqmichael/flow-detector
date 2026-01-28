@@ -70,14 +70,14 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
+Phase: Watch App (Phase 4) - **COMPLETE — END-TO-END VERIFIED ON GALAXY WATCH 8**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
 - ✅ Heart rate streaming via Pulsoid WebSocket (HR only, fallback)
 - ✅ BLE HRM integration via Web Bluetooth (HR + RR-intervals for HRV)
 - ✅ HRV calculation (RMSSD/SDNN) from RR-interval data
-- ✅ Galaxy Watch relay server (standalone Node, port 8765)
+- ✅ Galaxy Watch relay server (standalone Node, port 8765, binds 0.0.0.0 for LAN)
 - ✅ Watch stream browser hook with exponential backoff reconnection
 - ✅ EDA (skin conductance) scoring with Gaussian z-score model
 - ✅ Three-tier flow scoring: eye-only → eye+HRV → eye+HRV+EDA
@@ -89,10 +89,15 @@ Phase: Watch App (Phase 4) - **KOTLIN WATCH APP BUILT, NEEDS ON-DEVICE TESTING**
 - ✅ Algorithm test suite (17 tests, all passing)
 - ✅ Graceful degradation: immediate tier drop-back when sensors disconnect
 - ✅ Galaxy Watch Kotlin app (watch-app/) — Compose UI, Samsung Health SDK, WebSocket with backoff
+- ✅ End-to-end verified: Watch → Relay → Browser dashboard (HR + IBI/RMSSD + EDA/SCL all flowing)
 
 ### What's Next
-- **On-device testing** — Deploy watch-app to Galaxy Watch 8, download Samsung Health Sensor SDK AAR, verify end-to-end data flow
 - **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
+
+### Watch App Setup Notes
+- Samsung Health Sensor SDK AAR must be downloaded from https://developer.samsung.com/health/sensor and placed in `watch-app/app/libs/`
+- **Health Platform Developer Mode** must be enabled on the watch: Settings → Apps → Health Platform → tap title 10x rapidly until "[Dev mode]" appears. Without this, the SDK silently queues the app and no sensor data is delivered.
+- Watch IP must be set to the MacBook's LAN IP (e.g. 192.168.1.45), relay server must be running (`npm run watch-server`)
 
 ## Calibration System
 
