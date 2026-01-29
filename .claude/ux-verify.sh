@@ -8,45 +8,103 @@ cd "$CLAUDE_PROJECT_DIR" || exit 1
 echo "=== UX VERIFICATION CONTEXT ==="
 echo ""
 
-# Get recent changes
-echo "## Recent File Changes"
+# Determine diff range based on working tree state
+DIFF_RANGE=""
+DIFF_DESCRIPTION=""
+
 if [ -n "$(git status --porcelain)" ]; then
+    # Uncommitted changes exist - diff against HEAD
+    DIFF_RANGE="HEAD"
+    DIFF_DESCRIPTION="uncommitted changes"
+else
+    # Working tree is clean - find appropriate comparison base
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+    # Try to find merge-base with main/master
+    if git rev-parse --verify origin/main >/dev/null 2>&1; then
+        BASE_BRANCH="origin/main"
+    elif git rev-parse --verify origin/master >/dev/null 2>&1; then
+        BASE_BRANCH="origin/master"
+    elif git rev-parse --verify main >/dev/null 2>&1; then
+        BASE_BRANCH="main"
+    elif git rev-parse --verify master >/dev/null 2>&1; then
+        BASE_BRANCH="master"
+    else
+        BASE_BRANCH=""
+    fi
+
+    if [ -n "$BASE_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
+        # On a feature branch - diff from merge-base with main
+        MERGE_BASE=$(git merge-base "$BASE_BRANCH" HEAD 2>/dev/null)
+        if [ -n "$MERGE_BASE" ]; then
+            DIFF_RANGE="${MERGE_BASE}..HEAD"
+            DIFF_DESCRIPTION="branch changes since $BASE_BRANCH"
+        fi
+    fi
+
+    # Fallback to last commit if no branch diff available
+    if [ -z "$DIFF_RANGE" ]; then
+        DIFF_RANGE="HEAD~1..HEAD"
+        DIFF_DESCRIPTION="last commit"
+    fi
+fi
+
+echo "## Recent File Changes"
+echo "Scanning: $DIFF_DESCRIPTION"
+echo ""
+
+if [ "$DIFF_RANGE" = "HEAD" ]; then
     echo "Modified files:"
     git status --porcelain | head -20
     echo ""
     echo "Diff summary:"
     git diff --stat HEAD 2>/dev/null | tail -10
 else
-    echo "No uncommitted changes."
+    echo "Commits in range:"
+    git log --oneline "$DIFF_RANGE" 2>/dev/null | head -10
+    echo ""
+    echo "Diff summary:"
+    git diff --stat "$DIFF_RANGE" 2>/dev/null | tail -10
 fi
 echo ""
 
-# Check for UX-sensitive patterns in recent changes
+# Check for UX-sensitive patterns in the determined diff range
 echo "## UX-Sensitive Pattern Scan"
 
+FOUND_ISSUES=0
+
 # Check for notification-related code
-if git diff HEAD 2>/dev/null | grep -iE "(notification|alert|popup|modal|toast)" > /dev/null; then
+if git diff "$DIFF_RANGE" 2>/dev/null | grep -iE "(notification|alert|popup|modal|toast)" > /dev/null; then
     echo "WARNING: Changes contain notification/alert patterns. Verify against B1 (Noise Violations)."
+    FOUND_ISSUES=1
 fi
 
 # Check for emotion-detection or labeling code
-if git diff HEAD 2>/dev/null | grep -iE "(you seem|you sound|you are feeling|stressed|anxious|tired)" > /dev/null; then
+if git diff "$DIFF_RANGE" 2>/dev/null | grep -iE "(you seem|you sound|you are feeling|stressed|anxious|tired)" > /dev/null; then
     echo "WARNING: Changes contain emotion-labeling patterns. Verify against B2 (Authority Violations)."
+    FOUND_ISSUES=1
 fi
 
 # Check for gamification patterns
-if git diff HEAD 2>/dev/null | grep -iE "(streak|badge|score|points|daily|achievement)" > /dev/null; then
+if git diff "$DIFF_RANGE" 2>/dev/null | grep -iE "(streak|badge|score|points|daily|achievement)" > /dev/null; then
     echo "WARNING: Changes contain gamification patterns. Verify against B3 (Dependency Violations)."
+    FOUND_ISSUES=1
 fi
 
 # Check for data persistence
-if git diff HEAD 2>/dev/null | grep -iE "(localStorage|indexedDB|persist|save.*emotion|store.*feeling)" > /dev/null; then
+if git diff "$DIFF_RANGE" 2>/dev/null | grep -iE "(localStorage|indexedDB|persist|save.*emotion|store.*feeling)" > /dev/null; then
     echo "WARNING: Changes contain persistence patterns. Verify against B4 (Memory/Privacy Violations)."
+    FOUND_ISSUES=1
 fi
 
 # Check for verbose AI responses
-if git diff HEAD 2>/dev/null | grep -iE "(I am processing|I am reasoning|analyzing your|let me analyze)" > /dev/null; then
+if git diff "$DIFF_RANGE" 2>/dev/null | grep -iE "(I am processing|I am reasoning|analyzing your|let me analyze)" > /dev/null; then
     echo "WARNING: Changes contain verbose AI patterns. Verify against B5 (Latency/Presence Violations)."
+    FOUND_ISSUES=1
+fi
+
+if [ $FOUND_ISSUES -eq 0 ]; then
+    echo "No obvious UX-sensitive patterns detected."
 fi
 
 echo ""
