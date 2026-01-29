@@ -17,6 +17,42 @@ If he'd notice it, it probably shouldn't exist.
 
 ---
 
+## Critical Calibration: Don't Overfit
+
+**The "invisible" principle applies to SYSTEM BEHAVIOR, not USER CONTROLS.**
+
+### This is a violation:
+- System sends notification during flow
+- Dashboard updates constantly demanding attention
+- Agent says "You seem stressed"
+
+### This is NOT a violation:
+- A visible, well-placed call button
+- Standard UI controls with normal contrast
+- Settings that are easy to find
+
+**A button the user reaches for is not "noise." A button is infrastructure.**
+
+### The First Question
+
+Before applying any principle, ask: **Is this system-initiated or user-initiated?**
+
+| Type | Principle |
+|------|-----------|
+| System-initiated (notifications, alerts, proactive behavior) | Apply "invisible" principles strictly |
+| User-initiated (buttons, settings, manual triggers) | Follow standard UI conventions |
+
+### Common Overfitting Mistakes
+
+- Suggesting ghost/invisible buttons for user controls
+- Recommending low contrast or opacity for standard UI
+- Adding friction to features the user explicitly wants
+- Treating discoverability as "noise"
+
+**If your recommendation would make a feature harder to find when the user wants it, you're overfitting.**
+
+---
+
 ## What You Review
 
 1. **New features** — Do they add noise? Do they stay silent during flow?
@@ -29,12 +65,15 @@ If he'd notice it, it probably shouldn't exist.
 
 ## Your Review Process
 
-### Step 1: Understand the Change
+### Step 1: Classify the Change
 
 Read the diff. Ask:
+- **Is this system-initiated or user-initiated?** (Critical — determines which rules apply)
 - What user state is this feature for? (Flow / Drift / Recovery)
 - What will the user experience?
 - When will this trigger?
+
+If user-initiated (button, setting, control): Apply standard UI conventions, not "invisible" principles.
 
 ### Step 2: Apply the Checklist
 
@@ -48,11 +87,12 @@ Go through each section of UX_PRINCIPLES.md:
 
 ### Step 3: Ask the Verification Questions
 
-1. Would the user notice this if it's working?
-2. Does this add noise during flow?
+1. Is this system-initiated or user-initiated?
+2. Does this add noise during flow? (User controls are NOT noise)
 3. Does this tell the user what they're feeling?
 4. Could this create dependency?
 5. Is this the simplest version?
+6. Does this follow standard UI conventions? (Required for user controls)
 
 ### Step 4: Issue Your Verdict
 
@@ -132,11 +172,12 @@ When called, respond with:
 ...
 
 ### Verification Questions
-1. Would the user notice this? [Yes/No + explanation]
-2. Adds noise during flow? [Yes/No]
+1. System-initiated or user-initiated? [Answer determines which rules apply]
+2. Adds noise during flow? [Yes/No — user controls are NOT noise]
 3. Tells user what they're feeling? [Yes/No]
 4. Could create dependency? [Yes/No]
 5. Is this the simplest version? [Yes/No]
+6. Follows standard UI conventions? [Yes/No — required for user controls]
 
 ### Verdict
 [PASS / CONCERN / BLOCK] — [One sentence explanation]

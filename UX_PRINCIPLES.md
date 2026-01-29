@@ -19,6 +19,29 @@ If it's working well, the user shouldn't feel like they're "using" anything. The
 
 ---
 
+## Critical Distinction: Behavior vs Affordances
+
+**"Invisible" applies to system BEHAVIOR, not user CONTROLS.**
+
+| Category | Principle | Example |
+|----------|-----------|---------|
+| **System-initiated** | Should be invisible/silent | Notifications, alerts, dashboards during flow |
+| **User-initiated** | Should be discoverable | Call button, settings, manual triggers |
+
+### User-Initiated Affordances Should:
+- Be **easy to find** when the user wants them
+- Follow **standard UI conventions** (placement, contrast, sizing)
+- Be **forgettable** when not needed — but not hidden
+- Reduce cognitive load ("where's that thing?") not increase it
+
+### The Test:
+- If the user has to *search* for a control they want → bad UX (creates friction)
+- If the system *interrupts* with something the user didn't ask for → bad UX (creates noise)
+
+**A visible call button is not noise. An unsolicited "how are you?" popup is noise.**
+
+---
+
 ## The Three Modes
 
 | Mode | User State | System Behavior |
@@ -80,9 +103,11 @@ If it's working well, the user shouldn't feel like they're "using" anything. The
 - [ ] Regulating response delivered in text (should be voice)
 - [ ] Cognitive content where co-regulation was needed
 
-**S3. Friction Balance**
-- [ ] Feature is too easy to reach for (might create dependency)
-- [ ] Feature is so frictionless it becomes reflexive
+**S3. Friction Balance** (applies to habitual/addictive patterns only)
+- [ ] Feature encourages reflexive checking (like pull-to-refresh, notification badges)
+- [ ] Zero-friction design creates compulsive usage patterns
+
+Note: Basic controls (buttons, settings) should NOT have artificial friction. This principle applies to features that could become addictive habits, not to standard UI affordances.
 
 **S4. Reflection Prompts**
 - [ ] Prompts feel algorithmic rather than human
@@ -166,11 +191,21 @@ If it's working well, the user shouldn't feel like they're "using" anything. The
 
 Before approving any feature, ask:
 
-1. **Would the user notice this if it's working?** (Ideally: no)
-2. **Does this add noise during flow?** (Must be: no)
+1. **Is this system-initiated or user-initiated?** (Determines which rules apply)
+2. **Does this add noise during flow?** (Must be: no — but user controls are not "noise")
 3. **Does this tell the user what they're feeling?** (Must be: no)
 4. **Could this create dependency?** (Should be: unlikely)
-5. **Is the simplest version of this feature?** (Should be: yes)
+5. **Is this the simplest version of this feature?** (Should be: yes)
+6. **Does this follow standard UI conventions?** (User controls: yes. System behavior: be invisible)
+
+### Calibration Warning
+
+Do NOT apply "invisible" principles to:
+- Buttons, controls, and user-initiated affordances
+- Standard UI elements that need to be discoverable
+- Features the user explicitly reaches for
+
+**Overfitting on "invisible" creates frustrating, hard-to-use interfaces. The goal is invisible BEHAVIOR, not invisible CONTROLS.**
 
 ---
 
