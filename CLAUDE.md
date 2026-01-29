@@ -64,7 +64,7 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Watch App (Phase 4) - **COMPLETE — END-TO-END VERIFIED ON GALAXY WATCH 8**
+Phase: UX Agent Verification Layer - **IN PROGRESS**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
@@ -84,6 +84,10 @@ Phase: Watch App (Phase 4) - **COMPLETE — END-TO-END VERIFIED ON GALAXY WATCH 
 - ✅ Graceful degradation: immediate tier drop-back when sensors disconnect
 - ✅ Galaxy Watch Kotlin app (watch-app/) — Compose UI, Samsung Health SDK, WebSocket with backoff
 - ✅ End-to-end verified: Watch → Relay → Browser dashboard (HR + IBI/RMSSD + EDA/SCL all flowing)
+- ✅ UX Principles document (UX_PRINCIPLES.md) — codified philosophy into checkable rules
+- ✅ UX Agent instructions (UX_AGENT.md) — verification process for cross-checking
+- ✅ PostToolUse hook for UX reminders on Write/Edit
+- ✅ AGENTS.md updated with dual-agent review process
 
 ### What's Next
 - **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
@@ -258,10 +262,42 @@ src/
         └── CalibrationOverlay.tsx ✅ 4-step calibration UI with reading text
 ```
 
+## UX Verification Agent
+
+A two-layer review system ensures both code quality and UX alignment:
+
+| Layer | Agent | Focus | Documents |
+|-------|-------|-------|-----------|
+| 1 | Building Agent | Types, tests, architecture | AGENTS.md |
+| 2 | UX Agent | Noise, privacy, simplicity | UX_AGENT.md, UX_PRINCIPLES.md |
+
+### Core UX Principle
+
+> "If it becomes noisy, smart, talkative, or opinionated, it has failed."
+
+The system should be **invisible when working**. Users should notice fewer interruptions, not a new tool.
+
+### UX Blocking Violations
+
+- **B1 Noise**: Notifications/dashboards during flow
+- **B2 Authority**: Telling user what they're feeling
+- **B3 Dependency**: Streaks, gamification, daily prompts
+- **B4 Privacy**: Silent emotional data persistence
+- **B5 Latency**: Dead air without social cues
+- **B6 Over-Engineering**: Building for hypotheticals
+
+### Integration
+
+- PostToolUse hook reminds building agent to check UX on Write/Edit
+- UX verification script: `.claude/ux-verify.sh`
+- Full checklist: `UX_PRINCIPLES.md`
+
 ## References
 
 - Architecture + data sources: `docs/architecture.md`
 - Watch Bridge plan: `WATCH-BRIDGE-PLAN.md`
+- UX Philosophy: `UX_PRINCIPLES.md`
+- UX Verification Process: `UX_AGENT.md`
 
 ## Remember
 
