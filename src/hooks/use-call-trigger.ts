@@ -15,7 +15,10 @@ interface CallTriggerResult {
   error?: string;
 }
 
-const CALL_SERVICE_URL = 'http://localhost:8766';
+// Use environment variable for call service URL, fallback to default port
+const CALL_SERVICE_URL =
+  process.env.NEXT_PUBLIC_CALL_SERVICE_URL ||
+  `http://localhost:${process.env.NEXT_PUBLIC_CALL_SERVICE_PORT || 8766}`;
 
 export function useCallTrigger() {
   const [isCalling, setIsCalling] = useState(false);
@@ -49,8 +52,15 @@ export function useCallTrigger() {
         callSid: data.callSid,
       };
 
-    } catch (error: any) {
-      const errorMessage = error.message || 'Failed to trigger call';
+    } catch (error: unknown) {
+      // Narrow error type for safe access
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : 'Failed to trigger call';
+
       setLastError(errorMessage);
       setIsCalling(false);
       return {

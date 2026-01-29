@@ -101,11 +101,23 @@ app.post('/call/trigger', async (req, res) => {
       reason
     });
 
-  } catch (error: any) {
-    console.error('[Call Error]', error.message);
+  } catch (error: unknown) {
+    // Narrow error type for safe access and deterministic messages
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'Unknown error occurred while triggering call';
+
+    console.error('[Call Error]', errorMessage);
+    if (error instanceof Error && error.stack) {
+      console.error('[Call Error Stack]', error.stack);
+    }
+
     res.status(500).json({
       success: false,
-      error: error.message
+      error: errorMessage
     });
   }
 });

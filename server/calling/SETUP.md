@@ -32,13 +32,15 @@ Alternatively, you can manually create the config with these settings:
 
 ### 3. Configure Environment Variables
 
+**Backend (Call Service):**
+
 1. Copy the example file:
    ```bash
    cd server/calling
    cp .env.example .env
    ```
 
-2. Edit `.env` and fill in your credentials:
+2. Edit `server/calling/.env` and fill in your credentials:
    ```bash
    TWILIO_ACCOUNT_SID=AC1234...
    TWILIO_AUTH_TOKEN=abc123...
@@ -46,6 +48,26 @@ Alternatively, you can manually create the config with these settings:
    HUME_API_KEY=hume_...
    HUME_CONFIG_ID=conf_...
    USER_PHONE_NUMBER=+15559876543
+   ```
+
+**Frontend (Next.js Dashboard):**
+
+The frontend needs to know where to find the call service. If you're using the default port (8766), no configuration is needed. If you change the port:
+
+1. Create a `.env.local` file in the project root:
+   ```bash
+   cd /home/user/flow-detector
+   cp .env.example .env.local
+   ```
+
+2. Uncomment and set the port:
+   ```bash
+   NEXT_PUBLIC_CALL_SERVICE_PORT=8766
+   ```
+
+   Or set the full URL:
+   ```bash
+   NEXT_PUBLIC_CALL_SERVICE_URL=http://localhost:8766
    ```
 
 ### 4. Install Dependencies
