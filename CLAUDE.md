@@ -64,7 +64,7 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: UX Agent Verification Layer - **IN PROGRESS**
+Phase: Code Orchestration Framework - **IN PROGRESS**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
@@ -292,12 +292,45 @@ The system should be **invisible when working**. Users should notice fewer inter
 - UX verification script: `.claude/ux-verify.sh`
 - Full checklist: `UX_PRINCIPLES.md`
 
+## Code Orchestration Framework
+
+A structured approach to Claude Code sessions based on task type.
+
+### Task Classification (Step Zero)
+
+| Task Type | Phases Needed |
+|-----------|---------------|
+| Question | None — just answer |
+| Bug fix | Plan → Test → Ship |
+| Small change | Plan → Build → Test → Ship |
+| Refactor | Plan → Test → Refactor → Verify |
+| New feature | Story → Plan → Build → Test → Ship |
+| Major feature | Full 7-phase loop |
+
+### The 7 Phases (Major Features Only)
+
+1. **Assumptions + TED** — Kill uncertainty first
+2. **User Story + Gherkin** — Behavior contract
+3. **C4 Mini Map** — Just enough architecture
+4. **Implementation Plan** — Files, functions, failure modes
+5. **Tests Plan** — Pyramid: unit > integration > E2E
+6. **PR Review Checklist** — Clean Code + UX checks
+7. **CI/CD Steps** — Build, test, deploy, rollback
+
+### Key Principle
+
+> "You can fit them into one Claude Code loop. You must pick. If you try to 'do everything,' you will ship nothing."
+
+See `.claude/orchestrator/ORCHESTRATOR.md` for full details.
+
 ## References
 
 - Architecture + data sources: `docs/architecture.md`
 - Watch Bridge plan: `WATCH-BRIDGE-PLAN.md`
 - UX Philosophy: `UX_PRINCIPLES.md`
 - UX Verification Process: `UX_AGENT.md`
+- **Code Orchestration**: `.claude/orchestrator/ORCHESTRATOR.md`
+- Iteration Template: `iterations/TEMPLATE.md`
 
 ## Remember
 
