@@ -64,7 +64,7 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: Code Orchestration Framework - **IN PROGRESS**
+Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
@@ -88,9 +88,10 @@ Phase: Code Orchestration Framework - **IN PROGRESS**
 - ✅ UX Agent instructions (UX_AGENT.md) — verification process for cross-checking
 - ✅ PostToolUse hook for UX reminders on Write/Edit
 - ✅ AGENTS.md updated with dual-agent review process
+- ✅ **Ambient Agent** — Server-side intervention system (sensor-triggered vs fixed-time comparison)
 
 ### What's Next
-- **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
+- **Field Testing** — Run the ambient agent prototype for 5-8 days to collect felt-experience ratings
 
 ### Watch App Setup Notes
 - Samsung Health Sensor SDK AAR must be downloaded from https://developer.samsung.com/health/sensor and placed in `watch-app/app/libs/`
@@ -229,7 +230,20 @@ watch-app/                             ✅ Galaxy Watch Kotlin app (Wear OS)
 ├── app/src/main/AndroidManifest.xml   ✅ Permissions + foreground service
 └── app/build.gradle.kts               ✅ Dependencies (Samsung AAR, OkHttp, Wear Compose)
 server/
-└── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
+├── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
+├── calling/                    ✅ Hume EVI + Twilio phone call service
+│   ├── call-service.ts         ✅ Express server (port 8766) for outbound calls
+│   ├── hume-config.json        ✅ EVI persona configuration
+│   ├── SETUP.md                ✅ Setup guide for Twilio + Hume credentials
+│   └── .env.example            ✅ Environment variables template
+└── ambient-agent/              ✅ Sensor-triggered intervention prototype
+    ├── types.ts                ✅ Intervention types, thresholds, state
+    ├── agent.ts                ✅ Main orchestrator (connects to relay, runs detection)
+    ├── detectors.ts            ✅ Flow, stress, recovery pattern detection
+    ├── interventions.ts        ✅ Delivery (Focus Mode, haptic, call-service)
+    ├── logger.ts               ✅ JSONL logging + condition comparison
+    ├── hrv-calculator.ts       ✅ Server-side HRV calculation
+    └── cli.ts                  ✅ CLI entry point (start, rate, compare, fixed)
 src/
 ├── app/
 │   ├── layout.tsx              ✅ Root layout
