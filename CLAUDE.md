@@ -306,73 +306,36 @@ The system should be **invisible when working**. Users should notice fewer inter
 - UX verification script: `.claude/ux-verify.sh`
 - Full checklist: `UX_PRINCIPLES.md`
 
-## Ambient Agent (Felt-Experience Prototype)
+## Code Orchestration Framework
 
-A 1-2 day MVP testing one hypothesis:
-> Does contextual signal (HR/HRV) make interventions feel better-timed than fixed-time triggers?
+A structured approach to Claude Code sessions based on task type.
 
-### Three Behaviors
+### Task Classification (Step Zero)
 
-| Behavior | Trigger | Action |
-|----------|---------|--------|
-| **A. Flow Protection** | Stable HR for 30+ min | Enable Focus Mode, suppress notifications |
-| **B. Proactive Check-in** | Elevated HR + suppressed HRV for 15+ min | Phone call via Hume EVI (emotion-adaptive) |
-| **C. Evening Reflection** | Recovery window (6-10 PM) or recovery detected | 2 random prompts, walking suggestion |
+| Task Type | Phases Needed |
+|-----------|---------------|
+| Question | None — just answer |
+| Bug fix | Plan → Test → Ship |
+| Small change | Plan → Build → Test → Ship |
+| Refactor | Plan → Test → Refactor → Verify |
+| New feature | Story → Plan → Build → Test → Ship |
+| Major feature | Full 7-phase loop |
 
-### Thresholds (adjustable after day 1-2)
+### The 7 Phases (Major Features Only)
 
-```typescript
-const FLOW_DETECTION = {
-  stillnessMinutes: 30,
-  hrStabilityThreshold: 5, // bpm variance
-};
+1. **Assumptions + TED** — Kill uncertainty first
+2. **User Story + Gherkin** — Behavior contract
+3. **C4 Mini Map** — Just enough architecture
+4. **Implementation Plan** — Files, functions, failure modes
+5. **Tests Plan** — Pyramid: unit > integration > E2E
+6. **PR Review Checklist** — Clean Code + UX checks
+7. **CI/CD Steps** — Build, test, deploy, rollback
 
-const STRESS_DETECTION = {
-  hrElevatedAboveBaseline: 10, // bpm
-  hrvSuppressedBelowBaseline: 0.7, // ratio
-  durationMinutes: 15,
-};
-```
+### Key Principle
 
-### Running the Agent
+> "You can fit them into one Claude Code loop. You must pick. If you try to 'do everything,' you will ship nothing."
 
-```bash
-# Terminal 1: Start watch relay
-npm run watch-server
-
-# Terminal 2: Start call service (requires Twilio + Hume credentials)
-# See server/calling/SETUP.md for credential setup
-npm run call-service
-
-# Terminal 3: Start ambient agent (sensor-triggered mode)
-npm run agent:start
-
-# Or: Fixed-time control mode (days 6-8)
-npm run agent:fixed
-
-# Rate last intervention
-npm run agent rate
-
-# Compare conditions
-npm run agent:compare
-```
-
-### Test Protocol
-
-- **Days 1-5**: Sensor-triggered interventions
-- **Days 6-8**: Control condition (fixed times, same behaviors)
-- Compare "well-timed" ratings between conditions
-
-### Success Criterion
-
-Sensor-triggered days score ≥1 point higher on "well-timed" than fixed-time days.
-
-### Daily Log (after each intervention)
-
-1. Did the check-in feel well-timed? (1-5)
-2. Did it help regulation or clarity? (1-5)
-3. Did it feel intrusive or annoying? (1-5)
-4. Would you want this again tomorrow? (yes/no)
+See `.claude/orchestrator/ORCHESTRATOR.md` for full details.
 
 ## References
 
@@ -380,6 +343,8 @@ Sensor-triggered days score ≥1 point higher on "well-timed" than fixed-time da
 - Watch Bridge plan: `WATCH-BRIDGE-PLAN.md`
 - UX Philosophy: `UX_PRINCIPLES.md`
 - UX Verification Process: `UX_AGENT.md`
+- **Code Orchestration**: `.claude/orchestrator/ORCHESTRATOR.md`
+- Iteration Template: `iterations/TEMPLATE.md`
 
 ## Remember
 
