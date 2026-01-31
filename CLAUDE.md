@@ -93,6 +93,12 @@ Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
 ### What's Next
 - **Field Testing** — Run the ambient agent prototype for 5-8 days to collect felt-experience ratings
 
+### Backlog (Call Service Improvements)
+- **Memory Layer** — Store conversation summaries, inject recent context into prompts before each call
+- **Cold Start Solution** — Agent backstory/persona (Character AI style) to provide conversation hooks
+- **Onboarding Flow** — First call as explicit introduction to seed initial context
+- **Dynamic Prompt Injection** — Include sensor context (mood, time of day, last conversation) in prompts
+
 ### Watch App Setup Notes
 - Samsung Health Sensor SDK AAR must be downloaded from https://developer.samsung.com/health/sensor and placed in `watch-app/app/libs/`
 - **Health Platform Developer Mode** must be enabled on the watch: Settings → Apps → Health Platform → tap title 10x rapidly until "[Dev mode]" appears. Without this, the SDK silently queues the app and no sensor data is delivered.
