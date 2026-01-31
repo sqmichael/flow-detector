@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Workflow: 1) Read CLAUDE.md 2) Plan with TodoWrite 3) Implement 4) UX Review (check UX_PRINCIPLES.md) 5) Commit + Push + Create PR for Codex review'"
+            "command": "echo 'ORCHESTRATOR: First classify the task (question/bug/small/refactor/feature/major). See .claude/orchestrator/ORCHESTRATOR.md for which phases apply. Use TodoWrite to plan.'"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'CONTEXT: Check CLAUDE.md for current phase. Use TodoWrite. Stay focused. When done: commit, push, and create a PR for Codex review.'"
+            "command": "echo 'CONTEXT: Stay focused on current task. When code changes are complete: commit, push, create PR.'"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'UX_CHECK: Before continuing, verify this change against UX_PRINCIPLES.md. Ask: Does this add noise during flow? Does it respect the invisible-when-working principle?'"
+            "command": "echo 'UX_CHECK: Does this change add noise during flow? Check UX_PRINCIPLES.md if touching UI or notifications.'"
           }
         ]
       }
