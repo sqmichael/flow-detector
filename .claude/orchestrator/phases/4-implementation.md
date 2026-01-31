@@ -33,6 +33,31 @@ Write to `iterations/current.md` under Phase 4:
 | Dependency | Why Needed |
 |------------|------------|
 | [Package/System] | [Rationale] |
+
+## Change Sequence
+[Order matters. What depends on what?]
+
+| Step | Change | Depends On |
+|------|--------|------------|
+| 1 | [First change] | — |
+| 2 | [Second change] | Step 1 |
+| 3 | [Third change] | Step 1, 2 |
+
+## Migration Path (if changing existing behavior)
+
+| Current State | Target State | Migration Strategy |
+|---------------|--------------|-------------------|
+| [How it works now] | [How it will work] | [How users/data transition] |
+
+**Breaking changes:** [Yes/No — if yes, explain impact]
+
+## Rollback Plan
+
+| Change | Rollback Method | Risk Level |
+|--------|-----------------|------------|
+| [Change 1] | [How to revert] | [Low/Med/High] |
+
+**Can each change be independently reverted?** [Yes/No]
 ```
 
 ## Building Agent Review
@@ -55,6 +80,9 @@ Before proceeding, verify:
 - [ ] All files to change identified
 - [ ] New functions/types specified
 - [ ] Failure modes documented with handling strategy
+- [ ] Change sequence defined (order of operations)
+- [ ] Migration path documented (if changing behavior)
+- [ ] Rollback plan exists for each change
 - [ ] Building agent review passed
 
 ## Next Phase

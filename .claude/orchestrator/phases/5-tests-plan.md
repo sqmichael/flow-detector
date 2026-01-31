@@ -24,6 +24,27 @@ Write to `iterations/current.md` under Phase 5:
 
 ## Test Strategy
 [Brief note: mocking approach, fixtures, test data]
+
+## Edge Cases (explicit list)
+| Edge Case | Expected Behavior | Test Coverage |
+|-----------|-------------------|---------------|
+| [Empty input] | [What should happen] | [Unit/Integration] |
+| [Null/undefined] | [What should happen] | [Unit] |
+| [Boundary value] | [What should happen] | [Unit] |
+| [Concurrent access] | [What should happen] | [Integration] |
+| [Network failure] | [What should happen] | [Integration] |
+
+## Test Data Requirements
+| Data Needed | Source | Notes |
+|-------------|--------|-------|
+| [Sample users] | [Fixtures / Factory] | [Anonymized] |
+| [Edge case inputs] | [Hardcoded] | [Document why] |
+
+## Manual Testing (what can't be automated)
+- [ ] [Visual appearance / layout]
+- [ ] [Cross-browser behavior]
+- [ ] [Physical device testing]
+- [ ] [Accessibility with screen reader]
 ```
 
 ## The Testing Pyramid
@@ -59,6 +80,9 @@ Skip E2E if:
 - [ ] Unit tests planned for core logic
 - [ ] Integration tests planned for module boundaries
 - [ ] E2E tests planned only if critical path
+- [ ] Edge cases explicitly listed
+- [ ] Test data requirements documented
+- [ ] Manual testing needs identified
 - [ ] Test strategy documented
 
 ## Next Phase

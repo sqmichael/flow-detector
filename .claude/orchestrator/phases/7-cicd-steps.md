@@ -34,6 +34,29 @@ Write to `iterations/current.md` under Phase 7:
 ## Blue-Green (if applicable)
 - [ ] N/A — Not needed for this change
 - [ ] Required — [Reason]
+
+## Gradual Rollout (if applicable)
+| Stage | Audience | Duration | Success Criteria |
+|-------|----------|----------|------------------|
+| Canary | 1% of users | 1 hour | No errors |
+| Ramp | 10% → 50% | 1 day | Metrics stable |
+| Full | 100% | — | — |
+
+- [ ] N/A — Ship to everyone immediately
+- [ ] Required — [Reason for gradual rollout]
+
+## Monitoring
+| Metric | Expected | Alert Threshold |
+|--------|----------|-----------------|
+| Error rate | < 0.1% | > 1% |
+| Latency p95 | < 200ms | > 500ms |
+| [Custom metric] | [Expected] | [Threshold] |
+
+## Alerting
+| Condition | Action | Who |
+|-----------|--------|-----|
+| Error spike | Page on-call | [Team/Person] |
+| Latency spike | Slack alert | [Channel] |
 ```
 
 ## When Blue-Green is Needed
@@ -55,6 +78,9 @@ Skip Blue-Green when:
 - [ ] Smoke test defined
 - [ ] Rollback plan documented
 - [ ] Blue-Green decision made
+- [ ] Gradual rollout decision made
+- [ ] Monitoring metrics defined
+- [ ] Alerting configured
 
 ## Iteration Complete
 

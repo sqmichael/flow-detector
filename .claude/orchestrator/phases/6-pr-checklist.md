@@ -35,6 +35,26 @@ Write to `iterations/current.md` under Phase 6:
 - [ ] B4: No silent emotional data persistence
 - [ ] B5: No dead air > 2s without social cue
 - [ ] B6: No over-engineering
+
+## Performance
+- [ ] No N+1 queries or unnecessary loops
+- [ ] Large lists virtualized or paginated
+- [ ] Images optimized (lazy load, correct size)
+- [ ] Bundle size impact acceptable
+- [ ] No memory leaks (listeners cleaned up)
+
+## Accessibility
+- [ ] Keyboard navigation works
+- [ ] Focus states visible
+- [ ] Color contrast sufficient (WCAG AA)
+- [ ] Screen reader tested (if UI change)
+- [ ] No motion without reduced-motion support
+
+## Observability
+- [ ] Errors logged with context (not swallowed)
+- [ ] Key actions have log statements
+- [ ] Metrics/tracing added (if applicable)
+- [ ] Can debug this in production?
 ```
 
 ## Blocking Issues (must fix)
@@ -60,6 +80,9 @@ From AGENTS.md — block the PR if any of these:
 - [ ] SOLID checks pass (where applied)
 - [ ] Security checks pass
 - [ ] UX checks pass
+- [ ] Performance checks pass
+- [ ] Accessibility checks pass
+- [ ] Observability checks pass
 - [ ] No blocking issues remain
 
 ## Next Phase

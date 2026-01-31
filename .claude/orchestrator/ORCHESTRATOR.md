@@ -1,88 +1,196 @@
-# Code Orchestration Framework
+# Risk-First Orchestrator
 
-> One iteration. One question. One proof. Ship it.
+> Your goal is not to write code. Your goal is to kill risk.
 
 ## Step Zero: Classify the Task
 
-Before doing anything, ask: **What type of task is this?**
+### Part A: Task Size
 
-| Task Type | Description | Phases |
-|-----------|-------------|--------|
-| **Question** | User wants information | None — just answer |
-| **Bug fix** | Something is broken | 4 → 5 → 6 → 7 (light) |
-| **Small change** | < 50 lines, single module | 4 → 5 → 6 → 7 |
-| **Refactor** | Restructure, same behavior | 4 → 5 → 6 → 7 |
-| **New feature** | New capability, clear scope | 2 → 4 → 5 → 6 → 7 |
-| **Major feature** | Multi-component, architectural | 1 → 2 → 3 → 4 → 5 → 6 → 7 |
-| **Risky change** | Uncertain assumptions | 1 → then reassess |
+| Size | Description | Protocol |
+|------|-------------|----------|
+| **Question** | User wants information | Just answer |
+| **Bug** | Something is broken | Fix → Test → Ship |
+| **Small** | < 50 lines, single module | Light flow (no phases) |
+| **Feature** | New capability | Risk-First protocol |
+| **Major** | Multi-component, architectural | Full Risk-First protocol |
 
-### Decision Shortcuts
+**Gate:** Only apply full protocol to Feature/Major. For Bug/Small, just do the work.
 
-- **"Fix the bug in X"** → Phase 4
-- **"Add a button that does Y"** → Phase 2
-- **"Refactor X to use Y pattern"** → Phase 4
-- **"Build a new system for Z"** → Phase 1
-- **"I'm not sure if X will work"** → Phase 1 only
+---
+
+### Part B: Dominant Risk (Feature/Major only)
+
+Ask: **What single thing is most likely to kill this project?**
+
+| Dominant Risk | Archetype | Lead Role | Governor Role |
+|---------------|-----------|-----------|---------------|
+| "We build the wrong thing" | **UX-First** | Product Designer | Senior Engineer |
+| "We don't know how to do this" | **Feasibility-First** | R&D Engineer | QA / Security |
+| "The systems won't connect" | **Integration-First** | Systems Architect | Domain Expert |
+| "The logic won't be correct" | **Data-First** | Data Scientist | Product Manager |
+| "We break existing behavior" | **Migration-First** | Maintainer | QA Lead |
+
+---
+
+## Archetype Details
+
+### UX-First
+- **Risk:** Desirability — will users want this?
+- **Start Phase:** 2 (User Story)
+- **Phase Order:** 2 → 1 → 3 → 4 → 5 → 6 → 7
+- **Gate:** User can complete core flow on prototype
+- **Defer:** Performance optimization, detailed architecture
+
+### Feasibility-First
+- **Risk:** Technical uncertainty — can we even do this?
+- **Start Phase:** 1 (Assumptions + spike)
+- **Phase Order:** 1 → 4 → 5 → 6 → 7 (skip 2, 3)
+- **Gate:** Proof of concept runs without crashing
+- **Defer:** Code quality, UI polish, error handling
+
+### Integration-First
+- **Risk:** Connectivity — will systems talk?
+- **Start Phase:** 3 (C4 Map / Data Flow)
+- **Phase Order:** 3 → 1 → 4 → 5 → 6 → 7 (skip 2)
+- **Gate:** Successful data exchange between systems
+- **Defer:** User stories (users are systems), UI
+
+### Data-First
+- **Risk:** Correctness — is the logic right?
+- **Start Phase:** 1 + 5 (Assumptions + Tests together)
+- **Phase Order:** 1 → 5 → 4 → 6 → 7 (skip 2, 3)
+- **Gate:** Algorithm passes all edge cases
+- **Defer:** User stories, architecture diagrams
+
+### Migration-First
+- **Risk:** Regression — will we break existing behavior?
+- **Start Phase:** 4 (Implementation Plan with migration focus)
+- **Phase Order:** 4 → 5 → 6 → 7 (skip 1, 2, 3)
+- **Gate:** 100% output parity on sample data
+- **Defer:** New features, UX improvements
+
+---
+
+## Operating Protocol
+
+### 1. Diagnose & Adopt
+
+State explicitly:
+```
+Dominant Risk: [What kills us if wrong]
+Archetype: [Which strategy]
+Start Phase: [Where to begin]
+```
+
+### 2. Lead/Governor Checkpoint
+
+Before completing each phase, ask:
+
+| Role | Question |
+|------|----------|
+| **Lead** | "Does this solve the problem?" |
+| **Governor** | "What fatal flaw am I not seeing?" |
+
+If Governor spots a fatal flaw → iterate before proceeding.
+
+### 3. Explicit Deferral
+
+List what you are ignoring NOW:
+```
+Deferring: [X, Y, Z] until [Gate] is passed.
+```
+
+This protects focus. You cannot accidentally scope-creep if you wrote down what you're ignoring.
+
+### 4. Stop Rule & Transition
+
+Each archetype has a **Gate** — a clear pass/fail condition.
+
+When Gate is passed:
+1. Summarize decisions made and constraints discovered
+2. Ask: "Gate passed. Ready to switch to [next risk]?"
 
 ---
 
 ## The 7 Phases
 
-| # | Phase | Prompt File | Reviewer |
-|---|-------|-------------|----------|
-| 1 | Assumptions + TED | `phases/1-assumptions.md` | Self |
-| 2 | User Story + Gherkin | `phases/2-user-story.md` | UX Agent |
-| 3 | C4 Mini Map | `phases/3-c4-map.md` | Self |
-| 4 | Implementation Plan | `phases/4-implementation.md` | Building Agent |
-| 5 | Tests Plan | `phases/5-tests-plan.md` | Building Agent |
-| 6 | PR Review Checklist | `phases/6-pr-checklist.md` | Both |
-| 7 | CI/CD Steps | `phases/7-cicd-steps.md` | Self |
+| # | Phase | Prompt File | When Used |
+|---|-------|-------------|-----------|
+| 1 | Assumptions + TED | `phases/1-assumptions.md` | All except Migration |
+| 2 | User Story + Gherkin | `phases/2-user-story.md` | UX-First |
+| 3 | C4 Mini Map | `phases/3-c4-map.md` | UX-First, Integration-First |
+| 4 | Implementation Plan | `phases/4-implementation.md` | All |
+| 5 | Tests Plan | `phases/5-tests-plan.md` | All |
+| 6 | PR Review Checklist | `phases/6-pr-checklist.md` | All |
+| 7 | CI/CD Steps | `phases/7-cicd-steps.md` | All |
 
-Read the phase file. Write output to `iterations/current.md`.
+Read ONLY the phase file you need. Write output to `iterations/current.md`.
 
 ---
 
-## Light Flows (No formal phases)
+## Light Flows (Bug/Small)
 
 ### Bug Fix
 ```
-1. Understand → 2. Plan → 3. Fix → 4. Test → 5. Ship
+Understand → Fix → Test → Ship
 ```
 
-### Small Feature
+### Small Change
 ```
-1. Story (one sentence) → 2. Plan → 3. Build → 4. Test → 5. Ship
+Plan (mental) → Build → Test → Ship
 ```
 
-### Refactor
-```
-1. Plan → 2. Test first → 3. Refactor → 4. Verify → 5. Ship
-```
+No phases needed. Just do the work.
 
 ---
 
 ## State Tracking
 
-Current iteration state: `state.json`
+Current iteration state in `state.json`:
 
 ```json
 {
   "iteration": "feature-name",
-  "taskType": "feature",
+  "taskSize": "feature",
+  "dominantRisk": "desirability",
+  "archetype": "ux-first",
   "currentPhase": "2-user-story.md",
-  "phasesRequired": ["2", "4", "5", "6", "7"],
-  "phasesCompleted": ["2"],
-  "startedAt": "2025-01-31T10:00:00Z",
-  "updatedAt": "2025-01-31T10:30:00Z"
+  "phasesRequired": ["2", "1", "3", "4", "5", "6", "7"],
+  "phasesCompleted": [],
+  "deferring": ["performance", "detailed-architecture"],
+  "gate": "User completes core flow on prototype"
 }
 ```
 
-Update `currentPhase` as you progress. Mark phases in `phasesCompleted`.
+---
+
+## Quick Reference
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     RISK-FIRST PROTOCOL                      │
+├─────────────────────────────────────────────────────────────┤
+│  1. SIZE    │ Bug/Small → Just do it                        │
+│             │ Feature/Major → Continue below                │
+├─────────────────────────────────────────────────────────────┤
+│  2. RISK    │ What single thing kills this project?         │
+├─────────────────────────────────────────────────────────────┤
+│  3. ADOPT   │ Select archetype, state it explicitly         │
+├─────────────────────────────────────────────────────────────┤
+│  4. DEFER   │ List what you're ignoring NOW                 │
+├─────────────────────────────────────────────────────────────┤
+│  5. BUILD   │ Follow phase order for your archetype         │
+├─────────────────────────────────────────────────────────────┤
+│  6. CHECK   │ Lead: Solved? Governor: Fatal flaw?           │
+├─────────────────────────────────────────────────────────────┤
+│  7. GATE    │ Pass condition met? → Transition or Ship      │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Key Principle
+## Remember
 
-> "If you try to 'do everything,' you will ship nothing."
+> "Your goal is not to write code. Your goal is to kill risk."
 
-Pick the right level of rigor for the task. Most tasks don't need all 7 phases.
+Identify the dominant risk. Adopt the right archetype. Defer everything else. Pass the gate. Ship.

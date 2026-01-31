@@ -42,6 +42,29 @@ Write to `iterations/current.md` under Phase 3:
 | Decision | Rationale |
 |----------|-----------|
 | [What] | [Why] |
+
+## Data Flow
+[How does data move through the system? Who sees what?]
+
+```
+[Source] → [Transform] → [Destination]
+         ↓
+    [Side effect]
+```
+
+**Privacy considerations:** [What data is sensitive? Who can access it?]
+
+## State Ownership
+| State | Owner | Persistence |
+|-------|-------|-------------|
+| [What state] | [Which container] | [Memory / DB / LocalStorage] |
+
+**Single source of truth:** [Where does authoritative state live?]
+
+## Trade-offs
+| We chose | Over | Because |
+|----------|------|---------|
+| [Option A] | [Option B] | [Rationale] |
 ```
 
 ## Rules
@@ -63,6 +86,9 @@ Skip if:
 - [ ] Context diagram shows actors and external systems
 - [ ] Container diagram shows main building blocks
 - [ ] Key architectural decisions documented with rationale
+- [ ] Data flow documented (who sees what)
+- [ ] State ownership clarified (single source of truth)
+- [ ] Trade-offs explicit (what we chose and why)
 
 ## Next Phase
 
