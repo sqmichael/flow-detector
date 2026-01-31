@@ -11,15 +11,21 @@
     "agent": "npx tsx server/ambient-agent/cli.ts",
     "agent:start": "npx tsx server/ambient-agent/cli.ts start",
     "agent:fixed": "npx tsx server/ambient-agent/cli.ts fixed",
-    "agent:compare": "npx tsx server/ambient-agent/cli.ts compare"
+    "agent:compare": "npx tsx server/ambient-agent/cli.ts compare",
+    "call-service": "npx tsx --env-file=server/calling/.env server/calling/call-service.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "next": "^16.1.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "twilio": "^5.12.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.17.12",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

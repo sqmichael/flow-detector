@@ -231,11 +231,16 @@ watch-app/                             ✅ Galaxy Watch Kotlin app (Wear OS)
 └── app/build.gradle.kts               ✅ Dependencies (Samsung AAR, OkHttp, Wear Compose)
 server/
 ├── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
+├── calling/                    ✅ Hume EVI + Twilio phone call service
+│   ├── call-service.ts         ✅ Express server (port 8766) for outbound calls
+│   ├── hume-config.json        ✅ EVI persona configuration
+│   ├── SETUP.md                ✅ Setup guide for Twilio + Hume credentials
+│   └── .env.example            ✅ Environment variables template
 └── ambient-agent/              ✅ Sensor-triggered intervention prototype
     ├── types.ts                ✅ Intervention types, thresholds, state
     ├── agent.ts                ✅ Main orchestrator (connects to relay, runs detection)
     ├── detectors.ts            ✅ Flow, stress, recovery pattern detection
-    ├── interventions.ts        ✅ Delivery (Focus Mode, haptic, notification)
+    ├── interventions.ts        ✅ Delivery (Focus Mode, haptic, call-service)
     ├── logger.ts               ✅ JSONL logging + condition comparison
     ├── hrv-calculator.ts       ✅ Server-side HRV calculation
     └── cli.ts                  ✅ CLI entry point (start, rate, compare, fixed)
@@ -311,7 +316,7 @@ A 1-2 day MVP testing one hypothesis:
 | Behavior | Trigger | Action |
 |----------|---------|--------|
 | **A. Flow Protection** | Stable HR for 30+ min | Enable Focus Mode, suppress notifications |
-| **B. Proactive Check-in** | Elevated HR + suppressed HRV for 15+ min | Watch haptic → "Want to walk and talk?" |
+| **B. Proactive Check-in** | Elevated HR + suppressed HRV for 15+ min | Phone call via Hume EVI (emotion-adaptive) |
 | **C. Evening Reflection** | Recovery window (6-10 PM) or recovery detected | 2 random prompts, walking suggestion |
 
 ### Thresholds (adjustable after day 1-2)
@@ -332,13 +337,17 @@ const STRESS_DETECTION = {
 ### Running the Agent
 
 ```bash
-# Start watch relay first
+# Terminal 1: Start watch relay
 npm run watch-server
 
-# Sensor-triggered mode (days 1-5)
+# Terminal 2: Start call service (requires Twilio + Hume credentials)
+# See server/calling/SETUP.md for credential setup
+npm run call-service
+
+# Terminal 3: Start ambient agent (sensor-triggered mode)
 npm run agent:start
 
-# Fixed-time control mode (days 6-8)
+# Or: Fixed-time control mode (days 6-8)
 npm run agent:fixed
 
 # Rate last intervention

@@ -103,67 +103,43 @@ export async function sendWatchHaptic(
 
 // ── Phone Call Trigger ──────────────────────────────────────────────
 
+const CALL_SERVICE_URL = process.env.CALL_SERVICE_URL || "http://localhost:8766";
+
 /**
- * Trigger a phone call with a script
+ * Trigger a phone call via the call-service (Twilio + Hume EVI)
  *
- * This can be implemented via:
- * 1. Twilio API call
- * 2. Webhook to a phone automation service
- * 3. Apple Shortcuts via osascript
- *
- * For MVP, we'll use a simple webhook approach.
+ * The call-service must be running separately:
+ *   npm run call-service
  */
 export async function triggerPhoneCall(
   phoneNumber: string | undefined,
   script: string = CHECKIN_SCRIPT
 ): Promise<boolean> {
-  if (!phoneNumber) {
-    console.log("[Interventions] Phone call requested but no number configured");
-    console.log(`[Interventions] Script: "${script}"`);
-    return false;
-  }
-
   try {
-    // Option 1: Webhook to a configured endpoint
-    const webhookUrl = process.env.PHONE_WEBHOOK_URL;
-    if (webhookUrl) {
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: phoneNumber,
-          script,
-          timestamp: Date.now(),
-        }),
-      });
+    // Call the call-service to trigger outbound call
+    const response = await fetch(`${CALL_SERVICE_URL}/call/trigger`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reason: "stress_check_in",
+        context: script,
+      }),
+    });
 
-      if (response.ok) {
-        console.log("[Interventions] Phone call triggered via webhook");
-        return true;
-      }
+    if (response.ok) {
+      const result = await response.json() as { callSid?: string };
+      console.log(`[Interventions] Phone call triggered via call-service`);
+      console.log(`[Interventions] Call SID: ${result.callSid || "unknown"}`);
+      return true;
+    } else {
+      console.log(`[Interventions] Call service returned ${response.status}`);
+      return false;
     }
-
-    // Option 2: Use osascript to initiate FaceTime audio call
-    // This requires user permission and FaceTime setup
-    await execAsync(`
-      osascript -e '
-        tell application "FaceTime"
-          activate
-          delay 1
-        end tell
-        tell application "System Events"
-          tell process "FaceTime"
-            -- Would need to enter number and click call
-          end tell
-        end tell
-      '
-    `);
-
-    console.log("[Interventions] Phone call initiated");
-    return true;
   } catch (error) {
-    console.log("[Interventions] Phone call trigger (simulated):", script);
-    return true; // Simulated success for testing
+    // Call service not running - show notification instead
+    console.log("[Interventions] Call service not available, showing notification");
+    await showNotification("Check-in", script, true);
+    return false;
   }
 }
 
