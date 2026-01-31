@@ -64,7 +64,7 @@ Uses a discriminated union on the `type` field with `protocolVersion` in the han
 
 ## Current Focus
 <!-- UPDATE THIS EACH SESSION -->
-Phase: UX Agent Verification Layer - **IN PROGRESS**
+Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
 
 ### What's Working
 - ✅ Eye tracking via MediaPipe (blink rate, gaze stability, EAR)
@@ -88,9 +88,10 @@ Phase: UX Agent Verification Layer - **IN PROGRESS**
 - ✅ UX Agent instructions (UX_AGENT.md) — verification process for cross-checking
 - ✅ PostToolUse hook for UX reminders on Write/Edit
 - ✅ AGENTS.md updated with dual-agent review process
+- ✅ **Ambient Agent** — Server-side intervention system (sensor-triggered vs fixed-time comparison)
 
 ### What's Next
-- **Focus Mode Shield** — Wire flow detection to trigger Mac Focus Mode via node-applescript
+- **Field Testing** — Run the ambient agent prototype for 5-8 days to collect felt-experience ratings
 
 ### Watch App Setup Notes
 - Samsung Health Sensor SDK AAR must be downloaded from https://developer.samsung.com/health/sensor and placed in `watch-app/app/libs/`
@@ -229,7 +230,15 @@ watch-app/                             ✅ Galaxy Watch Kotlin app (Wear OS)
 ├── app/src/main/AndroidManifest.xml   ✅ Permissions + foreground service
 └── app/build.gradle.kts               ✅ Dependencies (Samsung AAR, OkHttp, Wear Compose)
 server/
-└── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
+├── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
+└── ambient-agent/              ✅ Sensor-triggered intervention prototype
+    ├── types.ts                ✅ Intervention types, thresholds, state
+    ├── agent.ts                ✅ Main orchestrator (connects to relay, runs detection)
+    ├── detectors.ts            ✅ Flow, stress, recovery pattern detection
+    ├── interventions.ts        ✅ Delivery (Focus Mode, haptic, notification)
+    ├── logger.ts               ✅ JSONL logging + condition comparison
+    ├── hrv-calculator.ts       ✅ Server-side HRV calculation
+    └── cli.ts                  ✅ CLI entry point (start, rate, compare, fixed)
 src/
 ├── app/
 │   ├── layout.tsx              ✅ Root layout
@@ -291,6 +300,70 @@ The system should be **invisible when working**. Users should notice fewer inter
 - PostToolUse hook reminds building agent to check UX on Write/Edit
 - UX verification script: `.claude/ux-verify.sh`
 - Full checklist: `UX_PRINCIPLES.md`
+
+## Ambient Agent (Felt-Experience Prototype)
+
+A 1-2 day MVP testing one hypothesis:
+> Does contextual signal (HR/HRV) make interventions feel better-timed than fixed-time triggers?
+
+### Three Behaviors
+
+| Behavior | Trigger | Action |
+|----------|---------|--------|
+| **A. Flow Protection** | Stable HR for 30+ min | Enable Focus Mode, suppress notifications |
+| **B. Proactive Check-in** | Elevated HR + suppressed HRV for 15+ min | Watch haptic → "Want to walk and talk?" |
+| **C. Evening Reflection** | Recovery window (6-10 PM) or recovery detected | 2 random prompts, walking suggestion |
+
+### Thresholds (adjustable after day 1-2)
+
+```typescript
+const FLOW_DETECTION = {
+  stillnessMinutes: 30,
+  hrStabilityThreshold: 5, // bpm variance
+};
+
+const STRESS_DETECTION = {
+  hrElevatedAboveBaseline: 10, // bpm
+  hrvSuppressedBelowBaseline: 0.7, // ratio
+  durationMinutes: 15,
+};
+```
+
+### Running the Agent
+
+```bash
+# Start watch relay first
+npm run watch-server
+
+# Sensor-triggered mode (days 1-5)
+npm run agent:start
+
+# Fixed-time control mode (days 6-8)
+npm run agent:fixed
+
+# Rate last intervention
+npm run agent rate
+
+# Compare conditions
+npm run agent:compare
+```
+
+### Test Protocol
+
+- **Days 1-5**: Sensor-triggered interventions
+- **Days 6-8**: Control condition (fixed times, same behaviors)
+- Compare "well-timed" ratings between conditions
+
+### Success Criterion
+
+Sensor-triggered days score ≥1 point higher on "well-timed" than fixed-time days.
+
+### Daily Log (after each intervention)
+
+1. Did the check-in feel well-timed? (1-5)
+2. Did it help regulation or clarity? (1-5)
+3. Did it feel intrusive or annoying? (1-5)
+4. Would you want this again tomorrow? (yes/no)
 
 ## References
 

@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "watch-server": "npx tsx server/watch-relay.ts"
+    "watch-server": "npx tsx server/watch-relay.ts",
+    "agent": "npx tsx server/ambient-agent/cli.ts",
+    "agent:start": "npx tsx server/ambient-agent/cli.ts start",
+    "agent:fixed": "npx tsx server/ambient-agent/cli.ts fixed",
+    "agent:compare": "npx tsx server/ambient-agent/cli.ts compare"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",
