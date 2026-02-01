@@ -616,27 +616,20 @@ class SensorService : LifecycleService() {
             val now = System.currentTimeMillis()
             for (dp in dataPoints) {
                 try {
-                    // Single channel PPG - try different ValueKey patterns
-                    val green = try {
-                        dp.getValue(ValueKey.PpgSet.PPG_GREEN)
-                    } catch (e: Exception) {
-                        // Log available keys for debugging
-                        Log.d(TAG, "PPG_GREEN DataPoint keys: ${dp.toString()}")
-                        0
-                    }
+                    // PPG_GREEN tracker uses ValueKey.PpgGreenSet.PPG_GREEN
+                    val green = dp.getValue(ValueKey.PpgGreenSet.PPG_GREEN)
 
-                    if (green != 0) {
-                        synchronized(bufferLock) {
-                            ppgBuffer.add(PpgSample(
-                                green = green,
-                                ir = 0,  // Not available in single channel mode
-                                red = 0,
-                                timestamp = now
-                            ))
-                        }
+                    synchronized(bufferLock) {
+                        ppgBuffer.add(PpgSample(
+                            green = green,
+                            ir = 0,  // Not available in single channel mode
+                            red = 0,
+                            timestamp = now
+                        ))
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "PPG_GREEN data point error: ${e.message}")
+                    // Only log first error to avoid spam
+                    Log.w(TAG, "PPG_GREEN getValue error: ${e.message}")
                 }
             }
         }
