@@ -3,6 +3,7 @@
  *
  * Buffers events in memory and flushes to IndexedDB every 5 seconds.
  * Also flushes on visibilitychange (tab switch / laptop close).
+ * POSTs eye metrics to the sensor fusion server for correlation.
  * Provides download as JSONL and a marker/annotation API.
  */
 
@@ -25,16 +26,29 @@ import {
 } from "@/lib/logging/biometric-db";
 
 const FLUSH_INTERVAL_MS = 5000;
+const SERVER_URL = "http://localhost:8765";
+
+export interface EyeMetricsForServer {
+  window_start: number;
+  window_end: number;
+  blink_rate: number;
+  gaze_stability: number;
+  average_ear: number;
+  eye_flow_indicator: number;
+  frame_count: number;
+}
 
 export interface UseBiometricLogReturn {
   logHR: (bpm: number, ibi: number | null, rmssd: number | null, sdnn: number | null) => void;
   logEDA: (scl: number) => void;
   logFlow: (score: number, smoothedScore: number, tier: string, inFlow: boolean) => void;
+  logEyeMetrics: (metrics: EyeMetricsForServer) => void;
   logMarker: (tag?: string) => void;
   logAnnotation: (label: "high" | "mid" | "low" | "wrong", startTime: number, endTime: number) => void;
   downloadSession: () => Promise<void>;
   eventCount: number;
   sessionId: string;
+  serverSessionId: string | null;
 }
 
 export function useBiometricLog(): UseBiometricLogReturn {
@@ -43,6 +57,11 @@ export function useBiometricLog(): UseBiometricLogReturn {
   const eventCountRef = useRef(0);
   const [eventCount, setEventCount] = useState(0);
   const dbReadyRef = useRef(false);
+
+  // Server session tracking
+  const serverSessionIdRef = useRef<string | null>(null);
+  const [serverSessionId, setServerSessionId] = useState<string | null>(null);
+  const eyeMetricsBufferRef = useRef<EyeMetricsForServer[]>([]);
 
   // Initialize DB and save session metadata
   useEffect(() => {
@@ -57,7 +76,73 @@ export function useBiometricLog(): UseBiometricLogReturn {
         });
       })
       .catch((err) => console.error("[biometric-log] DB init failed:", err));
+
+    // Create server session
+    createServerSession();
+
+    return () => {
+      // Deactivate session on unmount
+      deactivateServerSession();
+    };
   }, []);
+
+  /**
+   * Create a session on the sensor fusion server
+   */
+  async function createServerSession() {
+    try {
+      const response = await fetch(`${SERVER_URL}/api/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+
+      if (!response.ok) {
+        console.error("[biometric-log] Failed to create server session:", response.status);
+        return;
+      }
+
+      const data = await response.json();
+      serverSessionIdRef.current = data.session_id;
+      setServerSessionId(data.session_id);
+      console.log("[biometric-log] Server session created:", data.session_id);
+
+      // Activate the session for watch batch storage
+      await activateServerSession(data.session_id);
+    } catch (err) {
+      console.error("[biometric-log] Failed to create server session:", err);
+    }
+  }
+
+  /**
+   * Activate the session on the server for watch batch storage
+   */
+  async function activateServerSession(sessionId: string) {
+    try {
+      await fetch(`${SERVER_URL}/api/session/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    } catch (err) {
+      console.error("[biometric-log] Failed to activate server session:", err);
+    }
+  }
+
+  /**
+   * Deactivate the session on the server
+   */
+  async function deactivateServerSession() {
+    try {
+      await fetch(`${SERVER_URL}/api/session/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: null }),
+      });
+    } catch {
+      // Ignore errors on cleanup
+    }
+  }
 
   // Flush buffer to IndexedDB
   const flush = useCallback(async () => {
@@ -72,13 +157,43 @@ export function useBiometricLog(): UseBiometricLogReturn {
     }
   }, []);
 
+  // Flush eye metrics to server
+  const flushEyeMetrics = useCallback(async () => {
+    if (!serverSessionIdRef.current || eyeMetricsBufferRef.current.length === 0) return;
+
+    const batch = eyeMetricsBufferRef.current.splice(0);
+
+    for (let i = 0; i < batch.length; i++) {
+      const metrics = batch[i];
+      try {
+        await fetch(`${SERVER_URL}/api/sensors/eye`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: serverSessionIdRef.current,
+            ...metrics,
+          }),
+        });
+      } catch (err) {
+        console.error("[biometric-log] Failed to POST eye metrics:", err);
+        // Put back this metric AND all remaining ones
+        eyeMetricsBufferRef.current.unshift(...batch.slice(i));
+        break; // Stop trying if server is down
+      }
+    }
+  }, []);
+
   // Periodic flush + visibilitychange flush
   useEffect(() => {
-    const interval = setInterval(flush, FLUSH_INTERVAL_MS);
+    const interval = setInterval(() => {
+      flush();
+      flushEyeMetrics();
+    }, FLUSH_INTERVAL_MS);
 
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
         flush();
+        flushEyeMetrics();
       }
     };
     document.addEventListener("visibilitychange", handleVisibility);
@@ -88,8 +203,9 @@ export function useBiometricLog(): UseBiometricLogReturn {
       document.removeEventListener("visibilitychange", handleVisibility);
       // Final flush on unmount
       flush();
+      flushEyeMetrics();
     };
-  }, [flush]);
+  }, [flush, flushEyeMetrics]);
 
   const pushEvent = useCallback((event: LogEvent) => {
     bufferRef.current.push(event);
@@ -141,6 +257,10 @@ export function useBiometricLog(): UseBiometricLogReturn {
     },
     [pushEvent]
   );
+
+  const logEyeMetrics = useCallback((metrics: EyeMetricsForServer) => {
+    eyeMetricsBufferRef.current.push(metrics);
+  }, []);
 
   const logMarker = useCallback(
     (tag?: string) => {
@@ -199,10 +319,12 @@ export function useBiometricLog(): UseBiometricLogReturn {
     logHR,
     logEDA,
     logFlow,
+    logEyeMetrics,
     logMarker,
     logAnnotation,
     downloadSession,
     eventCount,
     sessionId: sessionIdRef.current,
+    serverSessionId,
   };
 }

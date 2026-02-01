@@ -31,3 +31,6 @@ watch-app/app/build/
 watch-app/local.properties
 watch-app/app/libs/*.aar
 tsconfig.tsbuildinfo
+
+# Sensor fusion database
+server/data/
