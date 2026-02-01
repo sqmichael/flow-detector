@@ -181,6 +181,18 @@ export interface AmbientAgentState {
 // ── Configuration ───────────────────────────────────────────────────
 
 /**
+ * Quiet hours config - no interventions during these hours
+ */
+export interface QuietHoursConfig {
+  /** Hour to start quiet period (0-23), e.g., 22 = 10 PM */
+  startHour: number;
+  /** Hour to end quiet period (0-23), e.g., 7 = 7 AM */
+  endHour: number;
+  /** Timezone offset in hours from UTC, e.g., 8 for UTC+8 */
+  timezoneOffset: number;
+}
+
+/**
  * Full agent configuration
  */
 export interface AmbientAgentConfig {
@@ -191,6 +203,9 @@ export interface AmbientAgentConfig {
   flowDetection: FlowDetectionConfig;
   stressDetection: StressDetectionConfig;
   eveningReflection: EveningReflectionConfig;
+
+  /** Quiet hours - no interventions during sleep */
+  quietHours: QuietHoursConfig;
 
   /** Maximum interventions per day (across all types) */
   maxInterventionsPerDay: number;
@@ -226,6 +241,12 @@ export const DEFAULT_CONFIG: AmbientAgentConfig = {
       hrvAboveBaseline: 1.2, // 120% of baseline
       hrBelowBaseline: 5, // 5 bpm below baseline
     },
+  },
+
+  quietHours: {
+    startHour: 22, // 10 PM
+    endHour: 7, // 7 AM
+    timezoneOffset: 8, // UTC+8 (adjust for your timezone)
   },
 
   maxInterventionsPerDay: 2,

@@ -15,6 +15,7 @@
 import { createInterface } from "readline";
 import { getAgent, stopAgent } from "./agent";
 import { InterventionLogger, formatSummary } from "./logger";
+import { startRatingServer } from "./rating-server";
 import { DEFAULT_CONFIG, type Intervention } from "./types";
 
 const rl = createInterface({
@@ -247,6 +248,7 @@ async function main(): Promise<void> {
   switch (command) {
     case "start":
       console.log("Starting sensor-triggered mode...\n");
+      startRatingServer(); // Start rating server for ntfy button callbacks
       const agent = getAgent();
       await agent.start();
       await showStatus(true);
