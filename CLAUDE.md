@@ -355,11 +355,11 @@ See `.claude/orchestrator/ORCHESTRATOR.md` for full details.
 ## References
 
 - Architecture + data sources: `docs/architecture.md`
-- Watch Bridge plan: `WATCH-BRIDGE-PLAN.md`
-- UX Philosophy: `UX_PRINCIPLES.md`
-- UX Verification Process: `UX_AGENT.md`
+- Watch Bridge plan: `docs/WATCH-BRIDGE-PLAN.md`
+- UX Philosophy: `docs/UX_PRINCIPLES.md`
+- UX Verification Process: `docs/UX_AGENT.md`
 - **Code Orchestration**: `.claude/orchestrator/ORCHESTRATOR.md`
-- Iteration Template: `iterations/TEMPLATE.md`
+- Iteration Template: `docs/iteration-template.md`
 
 ## Remember
 

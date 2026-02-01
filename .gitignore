@@ -35,3 +35,4 @@ tsconfig.tsbuildinfo
 # Sensor fusion database
 server/data/
 .claude/orchestrator/state.json
+tsconfig.tsbuildinfo
