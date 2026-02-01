@@ -425,20 +425,33 @@ class SensorService : LifecycleService() {
         }
 
         // PPG provides raw photoplethysmography data (green, IR, red channels)
-        // Note: PPG may be listed as supported but throw IllegalArgumentException on some devices
+        // Try PPG_CONTINUOUS first (25Hz), fall back to PPG_ON_DEMAND (100Hz)
+        var ppgSubscribed = false
         if (HealthTrackerType.PPG_CONTINUOUS in supported) {
             try {
                 ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
                 ppgTracker?.setEventListener(ppgListener)
                 activeSensors.add("ppg")
-                Log.i(TAG, "PPG tracker subscribed")
-            } catch (e: IllegalArgumentException) {
-                Log.w(TAG, "PPG_CONTINUOUS listed as supported but getHealthTracker failed: ${e.message}")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_CONTINUOUS tracker subscribed (25Hz)")
             } catch (e: Exception) {
-                Log.w(TAG, "PPG tracker subscription failed: ${e.message}")
+                Log.w(TAG, "PPG_CONTINUOUS failed: ${e.message}")
             }
-        } else {
-            Log.w(TAG, "PPG_CONTINUOUS not supported")
+        }
+        // Fallback to PPG_ON_DEMAND if CONTINUOUS failed
+        if (!ppgSubscribed && HealthTrackerType.PPG_ON_DEMAND in supported) {
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_ON_DEMAND)
+                ppgTracker?.setEventListener(ppgListener)
+                activeSensors.add("ppg")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_ON_DEMAND tracker subscribed (100Hz)")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG_ON_DEMAND failed: ${e.message}")
+            }
+        }
+        if (!ppgSubscribed) {
+            Log.w(TAG, "No PPG tracker available")
         }
 
         // Accelerometer via Android SensorManager (not Samsung SDK)
