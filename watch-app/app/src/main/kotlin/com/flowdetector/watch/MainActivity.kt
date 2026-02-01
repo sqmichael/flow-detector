@@ -33,7 +33,7 @@ import androidx.wear.compose.material.*
 private const val TAG = "[WatchUI]"
 private const val PREFS_NAME = "flow_prefs"
 private const val KEY_SERVER_IP = "server_ip"
-private const val DEFAULT_IP = "10.0.2.2"
+private const val DEFAULT_IP = "5.223.63.202"
 
 class MainActivity : ComponentActivity() {
 
