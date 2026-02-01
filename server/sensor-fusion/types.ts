@@ -66,6 +66,19 @@ export interface WatchBatchRow {
   eda_min_scl: number | null;
   eda_max_scl: number | null;
   eda_samples: number;
+  // PPG (photoplethysmography) raw sensor data
+  ppg_green_mean: number | null;
+  ppg_green_std: number | null;
+  ppg_ir_mean: number | null;
+  ppg_ir_std: number | null;
+  ppg_red_mean: number | null;
+  ppg_red_std: number | null;
+  ppg_samples: number;
+  // Accelerometer data for stillness detection
+  accel_magnitude_mean: number | null;
+  accel_magnitude_std: number | null;
+  accel_stillness: number | null; // 0-1, higher = more still
+  accel_samples: number;
   quality: number; // 0-1, based on sample counts
   created_at: number;
 }
@@ -85,6 +98,19 @@ export interface WatchBatchInsert {
   eda_min_scl?: number | null;
   eda_max_scl?: number | null;
   eda_samples?: number;
+  // PPG fields (optional)
+  ppg_green_mean?: number | null;
+  ppg_green_std?: number | null;
+  ppg_ir_mean?: number | null;
+  ppg_ir_std?: number | null;
+  ppg_red_mean?: number | null;
+  ppg_red_std?: number | null;
+  ppg_samples?: number;
+  // Accelerometer fields (optional)
+  accel_magnitude_mean?: number | null;
+  accel_magnitude_std?: number | null;
+  accel_stillness?: number | null;
+  accel_samples?: number;
   quality?: number;
 }
 
@@ -131,10 +157,12 @@ export interface FusedWindowRow {
   watch_hrv_rmssd: number | null;
   watch_hrv_sdnn: number | null;
   watch_eda_mean_scl: number | null;
+  watch_accel_stillness: number | null; // 0-1, higher = more still
   watch_quality: number; // 0-1
   // Combined
   combined_flow_score: number | null;
-  tier: string; // "eye-only", "eye+hrv", "eye+hrv+eda"
+  motion_quality: number | null; // 0.5-1.0 multiplier based on stillness
+  tier: string; // "eye-only", "eye+hrv", "eye+hrv+eda", "eye+hrv+eda+stillness"
   created_at: number;
 }
 
@@ -154,8 +182,10 @@ export interface FusedWindowInsert {
   watch_hrv_rmssd?: number | null;
   watch_hrv_sdnn?: number | null;
   watch_eda_mean_scl?: number | null;
+  watch_accel_stillness?: number | null;
   watch_quality?: number;
   combined_flow_score?: number | null;
+  motion_quality?: number | null;
   tier?: string;
 }
 

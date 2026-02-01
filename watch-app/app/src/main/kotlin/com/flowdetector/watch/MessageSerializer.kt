@@ -66,6 +66,25 @@ data class EdaAggregate(
     val peakScl: Float
 )
 
+@Serializable
+data class PpgAggregate(
+    val greenMean: Float,
+    val greenStd: Float,
+    val irMean: Float,
+    val irStd: Float,
+    val redMean: Float,
+    val redStd: Float,
+    val samples: Int
+)
+
+@Serializable
+data class AccelAggregate(
+    val magnitudeMean: Float,
+    val magnitudeStd: Float,
+    val stillness: Float, // 0-1, higher = more still
+    val samples: Int
+)
+
 /**
  * 30-second aggregated batch message.
  * Reduces bandwidth from ~3-5 MB/day (1Hz) to ~200 KB/day.
@@ -77,6 +96,8 @@ data class BatchMessage(
     val hr: HrAggregate,
     val hrv: HrvAggregate,
     val eda: EdaAggregate,
+    val ppg: PpgAggregate? = null,
+    val accel: AccelAggregate? = null,
     val timestamp: Long
 ) {
     fun toJson(): String = json.encodeToString(this)

@@ -52,9 +52,57 @@ export interface WatchStatus {
 }
 
 /**
+ * Aggregated PPG data from watch batch
+ */
+export interface WatchPpgAggregate {
+  greenMean: number;
+  greenStd: number;
+  irMean: number;
+  irStd: number;
+  redMean: number;
+  redStd: number;
+  samples: number;
+}
+
+/**
+ * Aggregated accelerometer data from watch batch
+ */
+export interface WatchAccelAggregate {
+  magnitudeMean: number;
+  magnitudeStd: number;
+  stillness: number; // 0-1, higher = more still
+  samples: number;
+}
+
+/**
+ * 30-second aggregated batch from watch
+ */
+export interface WatchBatch {
+  type: "batch";
+  windowMs: number;
+  hr: {
+    mean: number;
+    min: number;
+    max: number;
+    samples: number;
+  };
+  hrv: {
+    rmssd: number;
+    sdnn: number;
+  };
+  eda: {
+    meanScl: number;
+    peakScl: number;
+  };
+  ppg?: WatchPpgAggregate | null;
+  accel?: WatchAccelAggregate | null;
+  timestamp: number;
+}
+
+/**
  * Union of all messages the browser can receive from the relay server
  */
-export type WatchMessage = WatchHandshake | WatchHeartRate | WatchEDA | WatchStatus;
+export type WatchMessage = WatchHandshake | WatchHeartRate | WatchEDA | WatchStatus | WatchBatch;
 
 /**
  * Heart rate data from the watch
@@ -134,6 +182,10 @@ export interface CombinedFlowMetrics {
   /** Skin conductance level in microsiemens */
   scl: number | null;
 
+  // Stillness metrics (null if accelerometer not available)
+  /** Stillness score (0-1, higher = more still) */
+  stillness: number | null;
+
   // Combined metrics
   /** Combined flow score (0-1) incorporating all sensors */
   combinedFlowScore: number;
@@ -141,6 +193,8 @@ export interface CombinedFlowMetrics {
   hasWatchData: boolean;
   /** Whether EDA data is included in the score */
   hasEdaData: boolean;
+  /** Whether stillness data is included in the score */
+  hasStillnessData: boolean;
 
   /** Unix timestamp in milliseconds */
   timestamp: number;
