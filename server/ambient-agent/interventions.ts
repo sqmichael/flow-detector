@@ -21,24 +21,38 @@ const execAsync = promisify(exec);
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC || "flow-detector-x7k9m2";
 const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+const RATING_SERVER = process.env.RATING_SERVER || "http://5.223.63.202:8767";
 
 /**
  * Send push notification via ntfy.sh
  * Works anywhere - delivers to phone via ntfy app
+ * If interventionId is provided, includes rating action buttons
  */
 export async function sendPushNotification(
   title: string,
   message: string,
-  priority: "low" | "default" | "high" = "default"
+  priority: "low" | "default" | "high" = "default",
+  interventionId?: string
 ): Promise<boolean> {
   try {
+    const headers: Record<string, string> = {
+      "Title": title,
+      "Priority": priority === "high" ? "high" : priority === "low" ? "low" : "default",
+      "Tags": "heart,wave",
+    };
+
+    // Add rating buttons if intervention ID provided
+    if (interventionId) {
+      headers["Actions"] = [
+        `http, 👍 Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
+        `http, 😐 Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
+        `http, 👎 Intrusive, ${RATING_SERVER}/rate/${interventionId}/bad, method=POST`,
+      ].join("; ");
+    }
+
     const response = await fetch(NTFY_URL, {
       method: "POST",
-      headers: {
-        "Title": title,
-        "Priority": priority === "high" ? "high" : priority === "low" ? "low" : "default",
-        "Tags": "heart,wave",
-      },
+      headers,
       body: message,
     });
 
@@ -185,14 +199,16 @@ export async function triggerPhoneCall(
 
 /**
  * Display notification on Mac AND send push to phone
+ * If interventionId is provided, push notification includes rating buttons
  */
 export async function showNotification(
   title: string,
   message: string,
-  sound: boolean = true
+  sound: boolean = true,
+  interventionId?: string
 ): Promise<boolean> {
   // Always send push notification (works anywhere)
-  await sendPushNotification(title, message, sound ? "default" : "low");
+  await sendPushNotification(title, message, sound ? "default" : "low", interventionId);
 
   // Also try macOS notification (works when at computer)
   try {
@@ -230,9 +246,9 @@ export async function executeIntervention(
     phoneNumber?: string;
   } = {}
 ): Promise<void> {
-  const { type, trigger } = intervention;
+  const { id, type, trigger } = intervention;
 
-  console.log(`\n[Interventions] Executing: ${type}`);
+  console.log(`\n[Interventions] Executing: ${type} (${id})`);
   console.log(`[Interventions] Reason: ${trigger.reason}`);
   console.log(`[Interventions] Context:`, trigger.context);
 
@@ -242,7 +258,8 @@ export async function executeIntervention(
       await showNotification(
         "Flow Mode",
         "Focus Mode enabled. Deep work protected.",
-        false // Silent notification
+        false, // Silent notification
+        id
       );
       break;
 
@@ -250,11 +267,12 @@ export async function executeIntervention(
       // First, send watch haptic
       await sendWatchHaptic(options.relayWs ?? null, "gentle");
 
-      // Show notification with option to call
+      // Show notification with rating buttons
       await showNotification(
         "Check-in",
         CHECKIN_SCRIPT,
-        true
+        true,
+        id
       );
 
       // Optionally trigger call if configured
@@ -267,11 +285,10 @@ export async function executeIntervention(
 
     case "evening_reflection":
       const prompts = getReflectionPrompts(2);
-      const message = prompts.join("\n\n");
 
-      await showNotification("Evening Reflection", prompts[0], true);
+      await showNotification("Evening Reflection", prompts[0], true, id);
 
-      // Show second prompt after a moment
+      // Show second prompt after a moment (no rating buttons on follow-ups)
       setTimeout(async () => {
         await showNotification("Reflection", prompts[1], false);
       }, 10000);

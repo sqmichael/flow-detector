@@ -1,0 +1,82 @@
+/**
+ * Rating Server
+ *
+ * Simple HTTP server that receives ratings from ntfy action buttons.
+ * Runs on port 8767.
+ */
+
+import { createServer, IncomingMessage, ServerResponse } from "http";
+import { InterventionLogger } from "./logger";
+
+const PORT = 8767;
+const logger = new InterventionLogger("./intervention-log.jsonl");
+
+function log(...args: unknown[]) {
+  const time = new Date().toLocaleTimeString();
+  console.log(`[${time}] [Rating]`, ...args);
+}
+
+const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  // Enable CORS for ntfy
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Parse URL: /rate/:id/:rating
+  const match = req.url?.match(/^\/rate\/([^/]+)\/(good|ok|bad)$/);
+
+  if (!match) {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not found");
+    return;
+  }
+
+  const [, id, rating] = match;
+
+  // Map rating to numeric scores
+  const ratingMap: Record<string, { wellTimed: number; helpedRegulation: number; feltIntrusive: number }> = {
+    good: { wellTimed: 5, helpedRegulation: 4, feltIntrusive: 1 },
+    ok: { wellTimed: 3, helpedRegulation: 3, feltIntrusive: 3 },
+    bad: { wellTimed: 1, helpedRegulation: 1, feltIntrusive: 5 },
+  };
+
+  const scores = ratingMap[rating];
+
+  try {
+    const success = await logger.updateRating(id, {
+      ...scores,
+      wantAgainTomorrow: rating === "good",
+    });
+
+    if (success) {
+      log(`Rated ${id}: ${rating}`);
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end(`Thanks! Rated: ${rating}`);
+    } else {
+      log(`Failed to rate ${id}: not found`);
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Intervention not found");
+    }
+  } catch (error) {
+    log(`Error rating ${id}:`, error);
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end("Error saving rating");
+  }
+});
+
+export function startRatingServer(): void {
+  server.listen(PORT, "0.0.0.0", () => {
+    log(`Listening on http://0.0.0.0:${PORT}`);
+    log(`Rate endpoints: /rate/:id/good, /rate/:id/ok, /rate/:id/bad`);
+  });
+}
+
+// Allow running standalone
+if (require.main === module) {
+  startRatingServer();
+}
