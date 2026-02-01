@@ -402,6 +402,9 @@ class SensorService : LifecycleService() {
         val supported = service.trackingCapability.supportHealthTrackerTypes
         val activeSensors = mutableListOf<String>()
 
+        // Log all supported tracker types for debugging
+        Log.i(TAG, "Supported tracker types: ${supported.map { it.name }}")
+
         if (HealthTrackerType.HEART_RATE_CONTINUOUS in supported) {
             heartRateTracker = service.getHealthTracker(HealthTrackerType.HEART_RATE_CONTINUOUS)
             heartRateTracker?.setEventListener(heartRateListener)
