@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Binder
 import android.os.IBinder
 import android.os.PowerManager
@@ -268,8 +272,11 @@ class SensorService : LifecycleService() {
     private var heartRateTracker: HealthTracker? = null
     private var edaTracker: HealthTracker? = null
     private var ppgTracker: HealthTracker? = null
-    private var accelTracker: HealthTracker? = null
     private lateinit var webSocketManager: WebSocketManager
+
+    // Android SensorManager for accelerometer (simpler than Samsung SDK)
+    private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as SensorManager }
+    private var accelerometer: Sensor? = null
 
     // --- Lifecycle ---
 
@@ -342,8 +349,8 @@ class SensorService : LifecycleService() {
         edaTracker = null
         ppgTracker?.unsetEventListener()
         ppgTracker = null
-        accelTracker?.unsetEventListener()
-        accelTracker = null
+        // Unregister Android accelerometer listener
+        sensorManager.unregisterListener(accelSensorListener)
         try {
             healthTrackingService?.disconnectService()
         } catch (e: Exception) {
@@ -424,14 +431,14 @@ class SensorService : LifecycleService() {
             Log.w(TAG, "PPG_CONTINUOUS not supported")
         }
 
-        // Accelerometer for stillness detection
-        if (HealthTrackerType.ACCELEROMETER_CONTINUOUS in supported) {
-            accelTracker = service.getHealthTracker(HealthTrackerType.ACCELEROMETER_CONTINUOUS)
-            accelTracker?.setEventListener(accelListener)
+        // Accelerometer via Android SensorManager (not Samsung SDK)
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (accelerometer != null) {
+            sensorManager.registerListener(accelSensorListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
             activeSensors.add("accelerometer")
-            Log.i(TAG, "Accelerometer tracker subscribed")
+            Log.i(TAG, "Accelerometer registered via SensorManager")
         } else {
-            Log.w(TAG, "ACCELEROMETER_CONTINUOUS not supported")
+            Log.w(TAG, "Accelerometer sensor not available")
         }
 
         webSocketManager.sensors = activeSensors
@@ -531,23 +538,18 @@ class SensorService : LifecycleService() {
             val now = System.currentTimeMillis()
             for (dp in dataPoints) {
                 try {
-                    // Samsung SDK provides PPG as arrays of values per channel
-                    // PPG_GREEN, PPG_IR, PPG_RED are the raw sensor values
-                    val greenList = dp.getValue(ValueKey.PpgSet.PPG_GREEN)
-                    val irList = dp.getValue(ValueKey.PpgSet.PPG_IR)
-                    val redList = dp.getValue(ValueKey.PpgSet.PPG_RED)
+                    // Samsung SDK 1.4.0: PPG values are single Int per DataPoint
+                    val green = dp.getValue(ValueKey.PpgSet.PPG_GREEN)
+                    val ir = dp.getValue(ValueKey.PpgSet.PPG_IR)
+                    val red = dp.getValue(ValueKey.PpgSet.PPG_RED)
 
-                    // Buffer each sample in the arrays
-                    val sampleCount = minOf(greenList.size, irList.size, redList.size)
                     synchronized(bufferLock) {
-                        for (i in 0 until sampleCount) {
-                            ppgBuffer.add(PpgSample(
-                                green = greenList[i],
-                                ir = irList[i],
-                                red = redList[i],
-                                timestamp = now
-                            ))
-                        }
+                        ppgBuffer.add(PpgSample(
+                            green = green,
+                            ir = ir,
+                            red = red,
+                            timestamp = now
+                        ))
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping incomplete PPG data point: ${e.message}")
@@ -564,42 +566,22 @@ class SensorService : LifecycleService() {
         }
     }
 
-    // --- Accelerometer Listener ---
+    // --- Accelerometer Listener (Android SensorManager) ---
 
-    private val accelListener = object : HealthTracker.TrackerEventListener {
-        override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
-            val now = System.currentTimeMillis()
-            for (dp in dataPoints) {
-                try {
-                    // Samsung SDK provides accelerometer as arrays of X, Y, Z values
-                    val xList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_X)
-                    val yList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Y)
-                    val zList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Z)
-
-                    // Buffer each sample in the arrays
-                    val sampleCount = minOf(xList.size, yList.size, zList.size)
-                    synchronized(bufferLock) {
-                        for (i in 0 until sampleCount) {
-                            accelBuffer.add(AccelSample(
-                                x = xList[i].toFloat(),
-                                y = yList[i].toFloat(),
-                                z = zList[i].toFloat(),
-                                timestamp = now
-                            ))
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Skipping incomplete accelerometer data point: ${e.message}")
-                }
+    private val accelSensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            synchronized(bufferLock) {
+                accelBuffer.add(AccelSample(
+                    x = event.values[0],
+                    y = event.values[1],
+                    z = event.values[2],
+                    timestamp = System.currentTimeMillis()
+                ))
             }
         }
 
-        override fun onFlushCompleted() {
-            Log.d(TAG, "Accelerometer tracker flush completed")
-        }
-
-        override fun onError(error: HealthTracker.TrackerError) {
-            Log.e(TAG, "Accelerometer tracker error: $error")
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // Accelerometer accuracy rarely changes, no action needed
         }
     }
 
