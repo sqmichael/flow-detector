@@ -428,9 +428,11 @@ class SensorService : LifecycleService() {
         }
 
         // PPG provides raw photoplethysmography data (green, IR, red channels)
-        // Try PPG_CONTINUOUS first (25Hz), fall back to PPG_ON_DEMAND (100Hz)
+        // Try combined trackers first, then fall back to individual channel trackers
         var ppgSubscribed = false
-        if (HealthTrackerType.PPG_CONTINUOUS in supported) {
+
+        // Try PPG_CONTINUOUS first (25Hz combined)
+        if (!ppgSubscribed && HealthTrackerType.PPG_CONTINUOUS in supported) {
             try {
                 ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
                 ppgTracker?.setEventListener(ppgListener)
@@ -441,7 +443,8 @@ class SensorService : LifecycleService() {
                 Log.w(TAG, "PPG_CONTINUOUS failed: ${e.message}")
             }
         }
-        // Fallback to PPG_ON_DEMAND if CONTINUOUS failed
+
+        // Fallback to PPG_ON_DEMAND (100Hz combined)
         if (!ppgSubscribed && HealthTrackerType.PPG_ON_DEMAND in supported) {
             try {
                 ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_ON_DEMAND)
@@ -453,8 +456,22 @@ class SensorService : LifecycleService() {
                 Log.w(TAG, "PPG_ON_DEMAND failed: ${e.message}")
             }
         }
+
+        // Fallback to PPG_GREEN (single channel - might work without partner approval)
+        if (!ppgSubscribed && HealthTrackerType.PPG_GREEN in supported) {
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_GREEN)
+                ppgTracker?.setEventListener(ppgGreenListener)
+                activeSensors.add("ppg_green")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_GREEN tracker subscribed (single channel)")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG_GREEN failed: ${e.message}")
+            }
+        }
+
         if (!ppgSubscribed) {
-            Log.w(TAG, "No PPG tracker available")
+            Log.w(TAG, "No PPG tracker available (tried CONTINUOUS, ON_DEMAND, GREEN)")
         }
 
         // Accelerometer via Android SensorManager (not Samsung SDK)
@@ -589,6 +606,47 @@ class SensorService : LifecycleService() {
 
         override fun onError(error: HealthTracker.TrackerError) {
             Log.e(TAG, "PPG tracker error: $error")
+        }
+    }
+
+    // --- PPG Green-only Listener (fallback for single channel) ---
+
+    private val ppgGreenListener = object : HealthTracker.TrackerEventListener {
+        override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
+            val now = System.currentTimeMillis()
+            for (dp in dataPoints) {
+                try {
+                    // Single channel PPG - try different ValueKey patterns
+                    val green = try {
+                        dp.getValue(ValueKey.PpgSet.PPG_GREEN)
+                    } catch (e: Exception) {
+                        // Log available keys for debugging
+                        Log.d(TAG, "PPG_GREEN DataPoint keys: ${dp.toString()}")
+                        0
+                    }
+
+                    if (green != 0) {
+                        synchronized(bufferLock) {
+                            ppgBuffer.add(PpgSample(
+                                green = green,
+                                ir = 0,  // Not available in single channel mode
+                                red = 0,
+                                timestamp = now
+                            ))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "PPG_GREEN data point error: ${e.message}")
+                }
+            }
+        }
+
+        override fun onFlushCompleted() {
+            Log.d(TAG, "PPG_GREEN tracker flush completed")
+        }
+
+        override fun onError(error: HealthTracker.TrackerError) {
+            Log.e(TAG, "PPG_GREEN tracker error: $error")
         }
     }
 
