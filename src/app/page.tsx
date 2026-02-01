@@ -26,11 +26,12 @@ export default function Home() {
   const flowDetectorRef = useRef<FlowDetectorState>(createFlowDetectorState());
   const [flowState, setFlowState] = useState<FlowDetectorState>(createFlowDetectorState());
 
-  // Biometric logging (IndexedDB + JSONL export)
+  // Biometric logging (IndexedDB + JSONL export + server sync)
   const {
     logHR,
     logEDA,
     logFlow,
+    logEyeMetrics,
     logMarker,
     logAnnotation,
     downloadSession,
@@ -106,6 +107,17 @@ export default function Home() {
   // Callback to handle new metrics with EMA smoothing
   const handleMetrics = useCallback(
     (m: Parameters<typeof calculateCombinedFlow>[0]) => {
+      // Log eye metrics to server for sensor fusion
+      logEyeMetrics({
+        window_start: m.windowStart,
+        window_end: m.windowEnd,
+        blink_rate: m.blinkRate,
+        gaze_stability: m.gazeStability,
+        average_ear: m.averageEAR,
+        eye_flow_indicator: m.eyeFlowIndicator,
+        frame_count: m.frameCount,
+      });
+
       // Calculate combined flow with working baseline from calibration
       const combined = calculateCombinedFlow(
         m,
@@ -139,7 +151,7 @@ export default function Home() {
       };
       setMetricsHistory((prev) => [...prev.slice(-11), smoothedCombined]);
     },
-    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData, logFlow]
+    [effectiveHeartRate, effectiveHrvMetrics, effectiveEDA, calibrationData, logFlow, logEyeMetrics]
   );
 
   const { state: trackingState, metrics } = useEyeTracking({

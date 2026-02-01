@@ -5,6 +5,8 @@
  * to browser clients (Next.js app). The watch connects to /watch and the
  * browser connects to /browser.
  *
+ * Also serves HTTP API endpoints for sensor fusion database.
+ *
  * Run: npx tsx server/watch-relay.ts
  */
 
@@ -12,6 +14,11 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer, IncomingMessage } from "http";
 import { URL } from "url";
 import { networkInterfaces } from "os";
+import express from "express";
+import cors from "cors";
+import { initDatabase, closeDatabase, insertWatchBatch } from "./sensor-fusion/database";
+import { sensorFusionRouter } from "./sensor-fusion/routes";
+import { processPendingFusion } from "./sensor-fusion/fusion";
 
 const PORT = 8765;
 const VERBOSE = process.argv.includes("--verbose");
@@ -26,10 +33,30 @@ function logVerbose(...args: unknown[]) {
   }
 }
 
+// Initialize database
+log("Initializing sensor fusion database...");
+initDatabase();
+log("Database initialized");
+
 // Connection tracking
 const browserClients = new Set<WebSocket>();
 let watchClient: WebSocket | null = null;
 let watchDeviceName: string | null = null;
+
+// Active session tracking (set by browser when creating session)
+let activeSessionId: string | null = null;
+
+/**
+ * Set the active session ID for watch batch storage
+ */
+export function setActiveSession(sessionId: string | null): void {
+  activeSessionId = sessionId;
+  if (sessionId) {
+    log(`Active session set: ${sessionId}`);
+  } else {
+    log("Active session cleared");
+  }
+}
 
 /**
  * Send a message to all connected browser clients
@@ -55,15 +82,88 @@ function sendWatchStatus(connected: boolean) {
   broadcastToBrowsers(status);
 }
 
-// Create HTTP server for path-based routing
-const httpServer = createServer((_req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end(
+/**
+ * Store watch batch in database if session is active
+ */
+function storeWatchBatch(msg: {
+  windowStart: number;
+  windowEnd: number;
+  hr?: { mean?: number; min?: number; max?: number; samples?: number };
+  hrv?: { rmssd?: number; sdnn?: number; samples?: number };
+  eda?: { meanScl?: number; minScl?: number; maxScl?: number; samples?: number };
+}): void {
+  if (!activeSessionId) {
+    logVerbose("No active session, skipping watch batch storage");
+    return;
+  }
+
+  try {
+    insertWatchBatch({
+      session_id: activeSessionId,
+      window_start: msg.windowStart,
+      window_end: msg.windowEnd,
+      hr_mean: msg.hr?.mean ?? null,
+      hr_min: msg.hr?.min ?? null,
+      hr_max: msg.hr?.max ?? null,
+      hr_samples: msg.hr?.samples ?? 0,
+      hrv_rmssd: msg.hrv?.rmssd ?? null,
+      hrv_sdnn: msg.hrv?.sdnn ?? null,
+      hrv_samples: msg.hrv?.samples ?? 0,
+      eda_mean_scl: msg.eda?.meanScl ?? null,
+      eda_min_scl: msg.eda?.minScl ?? null,
+      eda_max_scl: msg.eda?.maxScl ?? null,
+      eda_samples: msg.eda?.samples ?? 0,
+    });
+
+    // Trigger fusion after storing watch batch
+    const fusedWindows = processPendingFusion(activeSessionId);
+    if (fusedWindows.length > 0) {
+      logVerbose(`Created ${fusedWindows.length} fused window(s)`);
+    }
+    logVerbose(`Stored watch batch for session ${activeSessionId}`);
+  } catch (err) {
+    log(`Failed to store watch batch: ${err}`);
+  }
+}
+
+// Create Express app for HTTP routes
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Mount sensor fusion API routes
+app.use("/api", sensorFusionRouter);
+
+// Session activation endpoint
+app.post("/api/session/activate", (req, res) => {
+  const { session_id } = req.body;
+  if (session_id) {
+    setActiveSession(session_id);
+    res.json({ activated: true, session_id });
+  } else {
+    setActiveSession(null);
+    res.json({ activated: false });
+  }
+});
+
+// Status endpoint
+app.get("/", (_req, res) => {
+  res.type("text/plain").send(
     `Watch Relay Server\n` +
       `Watch: ${watchClient ? "connected" : "disconnected"}${watchDeviceName ? ` (${watchDeviceName})` : ""}\n` +
-      `Browsers: ${browserClients.size} connected\n`
+      `Browsers: ${browserClients.size} connected\n` +
+      `Active Session: ${activeSessionId || "none"}\n` +
+      `\nAPI Endpoints:\n` +
+      `  POST /api/sessions - Create session\n` +
+      `  GET  /api/sessions - List sessions\n` +
+      `  POST /api/sensors/eye - Receive eye metrics\n` +
+      `  GET  /api/fusion/time-aligned/:id - Query fused data\n` +
+      `  GET  /api/export/:id - Export session as JSONL\n`
   );
 });
+
+// Create HTTP server using Express
+const httpServer = createServer(app);
 
 const wss = new WebSocketServer({ server: httpServer });
 
@@ -97,19 +197,23 @@ function handleWatchConnection(ws: WebSocket) {
     const data = raw.toString();
 
     // Try to parse for handshake/logging, but always relay
+    let msg: Record<string, unknown>;
     try {
-      const msg = JSON.parse(data);
+      msg = JSON.parse(data);
 
       if (msg.type === "handshake") {
-        watchDeviceName = msg.deviceName || "Unknown Watch";
+        watchDeviceName = (msg.deviceName as string) || "Unknown Watch";
         log(
-          `Watch identified: ${watchDeviceName} (protocol v${msg.protocolVersion || "?"}), sensors: ${(msg.sensors || []).join(", ")}`
+          `Watch identified: ${watchDeviceName} (protocol v${msg.protocolVersion || "?"}), sensors: ${((msg.sensors as string[]) || []).join(", ")}`
         );
       } else if (msg.type === "batch") {
         log(
-          `Batch: HR=${msg.hr?.mean?.toFixed?.(0) || "?"} (${msg.hr?.samples || 0} samples), ` +
-            `HRV=${msg.hrv?.rmssd?.toFixed?.(1) || "?"}ms, SCL=${msg.eda?.meanScl?.toFixed?.(2) || "?"}µS`
+          `Batch: HR=${(msg.hr as Record<string, number>)?.mean?.toFixed?.(0) || "?"} (${(msg.hr as Record<string, number>)?.samples || 0} samples), ` +
+            `HRV=${(msg.hrv as Record<string, number>)?.rmssd?.toFixed?.(1) || "?"}ms, SCL=${(msg.eda as Record<string, number>)?.meanScl?.toFixed?.(2) || "?"}µS`
         );
+
+        // Store watch batch in database
+        storeWatchBatch(msg as Parameters<typeof storeWatchBatch>[0]);
       } else {
         logVerbose(`Watch → browsers: ${msg.type}`);
       }
@@ -167,9 +271,10 @@ function handleBrowserConnection(ws: WebSocket) {
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   const localIp = getLocalIp();
-  log(`Listening on ws://0.0.0.0:${PORT}`);
+  log(`Listening on http://0.0.0.0:${PORT}`);
   log(`  Watch:   ws://${localIp}:${PORT}/watch`);
   log(`  Browser: ws://localhost:${PORT}/browser`);
+  log(`  API:     http://localhost:${PORT}/api`);
   log(`  Verbose: ${VERBOSE ? "ON" : "OFF (use --verbose)"}`);
 });
 
@@ -188,6 +293,7 @@ function getLocalIp(): string {
 // Graceful shutdown
 process.on("SIGINT", () => {
   log("Shutting down...");
+  closeDatabase();
   wss.close();
   httpServer.close();
   process.exit(0);
