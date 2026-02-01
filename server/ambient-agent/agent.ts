@@ -75,6 +75,30 @@ const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 const HR_HISTORY_SIZE = 60 * 60; // 1 hour of samples at 1 Hz
 const HRV_HISTORY_SIZE = 60 * 10; // 10 minutes of HRV samples
 
+// ── Quiet Hours Check ───────────────────────────────────────────────
+
+/**
+ * Check if current time is within quiet hours (no interventions allowed)
+ * Uses configured timezone offset to calculate local time
+ */
+function isInQuietHours(config: AmbientAgentConfig): boolean {
+  const now = new Date();
+  // Get UTC hours and apply timezone offset (handles negative offsets)
+  const utcHour = now.getUTCHours();
+  const localHour = ((utcHour + config.quietHours.timezoneOffset) % 24 + 24) % 24;
+
+  const { startHour, endHour } = config.quietHours;
+
+  // Handle overnight quiet hours (e.g., 22:00 to 07:00)
+  if (startHour > endHour) {
+    // Quiet if after start OR before end
+    return localHour >= startHour || localHour < endHour;
+  } else {
+    // Quiet if between start and end
+    return localHour >= startHour && localHour < endHour;
+  }
+}
+
 // ── Ambient Agent Class ─────────────────────────────────────────────
 
 export class AmbientAgent {
@@ -371,6 +395,11 @@ export class AmbientAgent {
       }
     }
 
+    // Check quiet hours - no interventions during sleep
+    if (isInQuietHours(this.config)) {
+      return; // Respect quiet hours
+    }
+
     // Check intervention limits
     if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
       return; // Max interventions reached for today
@@ -547,6 +576,17 @@ export class AmbientAgent {
 
     // Interventions today
     lines.push(`║ Interventions: ${this.state.interventionsToday.length}/${this.config.maxInterventionsPerDay}`.padEnd(37) + "║");
+
+    // Local time and quiet hours status
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const utcMin = now.getUTCMinutes();
+    const offset = this.config.quietHours.timezoneOffset;
+    const localHour = ((utcHour + offset) % 24 + 24) % 24;
+    const localTime = `${localHour.toString().padStart(2, "0")}:${utcMin.toString().padStart(2, "0")}`;
+    const offsetStr = offset >= 0 ? `+${offset}` : `${offset}`;
+    const quietStatus = isInQuietHours(this.config) ? "🌙 Quiet" : "🔔 Active";
+    lines.push(`║ Local: ${localTime} (UTC${offsetStr}) ${quietStatus}`.padEnd(37) + "║");
 
     lines.push("╚════════════════════════════════════╝");
 
