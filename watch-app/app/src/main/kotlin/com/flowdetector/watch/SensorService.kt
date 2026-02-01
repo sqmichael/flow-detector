@@ -6,6 +6,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Binder
 import android.os.IBinder
 import android.os.PowerManager
@@ -102,13 +106,16 @@ class SensorService : LifecycleService() {
     /**
      * Calculate stillness score from accelerometer magnitude variance.
      * Returns 0-1, where 1 = perfectly still, 0 = very active.
-     * Uses stdDev threshold of 0.1 m/s² as reference for "movement".
+     * Uses stdDev threshold of 0.5 m/s² as reference for "movement".
+     * (0.1 was too sensitive - sensor noise alone caused stdDev > 0.1)
      */
     private fun calculateStillness(magnitudeStdDev: Float): Float {
         // Stillness = 1 - (stdDev / threshold), clamped to 0-1
-        // threshold of 0.1 m/s² corresponds to "noticeable movement"
-        val threshold = 0.1f
-        return (1f - (magnitudeStdDev / threshold)).coerceIn(0f, 1f)
+        // threshold of 0.5 m/s² is more tolerant of sensor noise while still detecting real movement
+        val threshold = 0.5f
+        val stillness = (1f - (magnitudeStdDev / threshold)).coerceIn(0f, 1f)
+        Log.d(TAG, "Stillness calc: stdDev=${magnitudeStdDev}, threshold=$threshold, stillness=$stillness")
+        return stillness
     }
 
     /**
@@ -268,8 +275,11 @@ class SensorService : LifecycleService() {
     private var heartRateTracker: HealthTracker? = null
     private var edaTracker: HealthTracker? = null
     private var ppgTracker: HealthTracker? = null
-    private var accelTracker: HealthTracker? = null
     private lateinit var webSocketManager: WebSocketManager
+
+    // Android SensorManager for accelerometer (simpler than Samsung SDK)
+    private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as SensorManager }
+    private var accelerometer: Sensor? = null
 
     // --- Lifecycle ---
 
@@ -342,8 +352,8 @@ class SensorService : LifecycleService() {
         edaTracker = null
         ppgTracker?.unsetEventListener()
         ppgTracker = null
-        accelTracker?.unsetEventListener()
-        accelTracker = null
+        // Unregister Android accelerometer listener
+        sensorManager.unregisterListener(accelSensorListener)
         try {
             healthTrackingService?.disconnectService()
         } catch (e: Exception) {
@@ -395,6 +405,9 @@ class SensorService : LifecycleService() {
         val supported = service.trackingCapability.supportHealthTrackerTypes
         val activeSensors = mutableListOf<String>()
 
+        // Log all supported tracker types for debugging
+        Log.i(TAG, "Supported tracker types: ${supported.map { it.name }}")
+
         if (HealthTrackerType.HEART_RATE_CONTINUOUS in supported) {
             heartRateTracker = service.getHealthTracker(HealthTrackerType.HEART_RATE_CONTINUOUS)
             heartRateTracker?.setEventListener(heartRateListener)
@@ -415,23 +428,60 @@ class SensorService : LifecycleService() {
         }
 
         // PPG provides raw photoplethysmography data (green, IR, red channels)
-        if (HealthTrackerType.PPG_CONTINUOUS in supported) {
-            ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
-            ppgTracker?.setEventListener(ppgListener)
-            activeSensors.add("ppg")
-            Log.i(TAG, "PPG tracker subscribed")
-        } else {
-            Log.w(TAG, "PPG_CONTINUOUS not supported")
+        // Try combined trackers first, then fall back to individual channel trackers
+        var ppgSubscribed = false
+
+        // Try PPG_CONTINUOUS first (25Hz combined)
+        if (!ppgSubscribed && HealthTrackerType.PPG_CONTINUOUS in supported) {
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
+                ppgTracker?.setEventListener(ppgListener)
+                activeSensors.add("ppg")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_CONTINUOUS tracker subscribed (25Hz)")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG_CONTINUOUS failed: ${e.message}")
+            }
         }
 
-        // Accelerometer for stillness detection
-        if (HealthTrackerType.ACCELEROMETER_CONTINUOUS in supported) {
-            accelTracker = service.getHealthTracker(HealthTrackerType.ACCELEROMETER_CONTINUOUS)
-            accelTracker?.setEventListener(accelListener)
+        // Fallback to PPG_ON_DEMAND (100Hz combined)
+        if (!ppgSubscribed && HealthTrackerType.PPG_ON_DEMAND in supported) {
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_ON_DEMAND)
+                ppgTracker?.setEventListener(ppgListener)
+                activeSensors.add("ppg")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_ON_DEMAND tracker subscribed (100Hz)")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG_ON_DEMAND failed: ${e.message}")
+            }
+        }
+
+        // Fallback to PPG_GREEN (single channel - might work without partner approval)
+        if (!ppgSubscribed && HealthTrackerType.PPG_GREEN in supported) {
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_GREEN)
+                ppgTracker?.setEventListener(ppgGreenListener)
+                activeSensors.add("ppg_green")
+                ppgSubscribed = true
+                Log.i(TAG, "PPG_GREEN tracker subscribed (single channel)")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG_GREEN failed: ${e.message}")
+            }
+        }
+
+        if (!ppgSubscribed) {
+            Log.w(TAG, "No PPG tracker available (tried CONTINUOUS, ON_DEMAND, GREEN)")
+        }
+
+        // Accelerometer via Android SensorManager (not Samsung SDK)
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        if (accelerometer != null) {
+            sensorManager.registerListener(accelSensorListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
             activeSensors.add("accelerometer")
-            Log.i(TAG, "Accelerometer tracker subscribed")
+            Log.i(TAG, "Accelerometer registered via SensorManager")
         } else {
-            Log.w(TAG, "ACCELEROMETER_CONTINUOUS not supported")
+            Log.w(TAG, "Accelerometer sensor not available")
         }
 
         webSocketManager.sensors = activeSensors
@@ -531,23 +581,18 @@ class SensorService : LifecycleService() {
             val now = System.currentTimeMillis()
             for (dp in dataPoints) {
                 try {
-                    // Samsung SDK provides PPG as arrays of values per channel
-                    // PPG_GREEN, PPG_IR, PPG_RED are the raw sensor values
-                    val greenList = dp.getValue(ValueKey.PpgSet.PPG_GREEN)
-                    val irList = dp.getValue(ValueKey.PpgSet.PPG_IR)
-                    val redList = dp.getValue(ValueKey.PpgSet.PPG_RED)
+                    // Samsung SDK 1.4.0: PPG values are single Int per DataPoint
+                    val green = dp.getValue(ValueKey.PpgSet.PPG_GREEN)
+                    val ir = dp.getValue(ValueKey.PpgSet.PPG_IR)
+                    val red = dp.getValue(ValueKey.PpgSet.PPG_RED)
 
-                    // Buffer each sample in the arrays
-                    val sampleCount = minOf(greenList.size, irList.size, redList.size)
                     synchronized(bufferLock) {
-                        for (i in 0 until sampleCount) {
-                            ppgBuffer.add(PpgSample(
-                                green = greenList[i],
-                                ir = irList[i],
-                                red = redList[i],
-                                timestamp = now
-                            ))
-                        }
+                        ppgBuffer.add(PpgSample(
+                            green = green,
+                            ir = ir,
+                            red = red,
+                            timestamp = now
+                        ))
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping incomplete PPG data point: ${e.message}")
@@ -564,42 +609,56 @@ class SensorService : LifecycleService() {
         }
     }
 
-    // --- Accelerometer Listener ---
+    // --- PPG Green-only Listener (fallback for single channel) ---
 
-    private val accelListener = object : HealthTracker.TrackerEventListener {
+    private val ppgGreenListener = object : HealthTracker.TrackerEventListener {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
             val now = System.currentTimeMillis()
             for (dp in dataPoints) {
                 try {
-                    // Samsung SDK provides accelerometer as arrays of X, Y, Z values
-                    val xList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_X)
-                    val yList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Y)
-                    val zList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Z)
+                    // PPG_GREEN tracker uses ValueKey.PpgGreenSet.PPG_GREEN
+                    val green = dp.getValue(ValueKey.PpgGreenSet.PPG_GREEN)
 
-                    // Buffer each sample in the arrays
-                    val sampleCount = minOf(xList.size, yList.size, zList.size)
                     synchronized(bufferLock) {
-                        for (i in 0 until sampleCount) {
-                            accelBuffer.add(AccelSample(
-                                x = xList[i].toFloat(),
-                                y = yList[i].toFloat(),
-                                z = zList[i].toFloat(),
-                                timestamp = now
-                            ))
-                        }
+                        ppgBuffer.add(PpgSample(
+                            green = green,
+                            ir = 0,  // Not available in single channel mode
+                            red = 0,
+                            timestamp = now
+                        ))
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Skipping incomplete accelerometer data point: ${e.message}")
+                    // Only log first error to avoid spam
+                    Log.w(TAG, "PPG_GREEN getValue error: ${e.message}")
                 }
             }
         }
 
         override fun onFlushCompleted() {
-            Log.d(TAG, "Accelerometer tracker flush completed")
+            Log.d(TAG, "PPG_GREEN tracker flush completed")
         }
 
         override fun onError(error: HealthTracker.TrackerError) {
-            Log.e(TAG, "Accelerometer tracker error: $error")
+            Log.e(TAG, "PPG_GREEN tracker error: $error")
+        }
+    }
+
+    // --- Accelerometer Listener (Android SensorManager) ---
+
+    private val accelSensorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            synchronized(bufferLock) {
+                accelBuffer.add(AccelSample(
+                    x = event.values[0],
+                    y = event.values[1],
+                    z = event.values[2],
+                    timestamp = System.currentTimeMillis()
+                ))
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            // Accelerometer accuracy rarely changes, no action needed
         }
     }
 
