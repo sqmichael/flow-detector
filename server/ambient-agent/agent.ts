@@ -32,6 +32,7 @@ import {
   type AmbientAgentState,
   type PersonalBaseline,
   type Intervention,
+  type BatchMessage,
 } from "./types";
 
 // Re-export WatchMessage types for the agent
@@ -64,7 +65,9 @@ interface WatchHandshake {
   timestamp: number;
 }
 
-type IncomingMessage = WatchHeartRate | WatchEDA | WatchStatus | WatchHandshake;
+// Batch messages use the BatchMessage type from ./types
+
+type IncomingMessage = WatchHeartRate | WatchEDA | WatchStatus | WatchHandshake | BatchMessage;
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -258,6 +261,10 @@ export class AmbientAgent {
         case "eda":
           this.handleEDA(msg);
           break;
+
+        case "batch":
+          this.handleBatch(msg);
+          break;
       }
     } catch (error) {
       this.log("Failed to parse message:", error);
@@ -311,6 +318,36 @@ export class AmbientAgent {
 
   private handleEDA(msg: WatchEDA): void {
     this.state.currentSCL = msg.scl;
+  }
+
+  private handleBatch(msg: BatchMessage): void {
+    // Validate batch
+    if (msg.hr.samples === 0) return;
+
+    this.log(
+      `Batch: HR=${msg.hr.mean.toFixed(0)} (${msg.hr.samples} samples), ` +
+        `HRV=${msg.hrv.rmssd.toFixed(1)}ms, SCL=${msg.eda.meanScl.toFixed(2)}µS`
+    );
+
+    // Update current values from batch aggregates
+    this.state.currentHR = Math.round(msg.hr.mean);
+    this.state.currentHRV = msg.hrv.rmssd;
+    this.state.currentSCL = msg.eda.meanScl;
+    this.state.lastSensorUpdate = msg.timestamp;
+
+    // Add to HR history (single sample per batch representing the window)
+    this.hrHistory.push({ hr: Math.round(msg.hr.mean), timestamp: msg.timestamp });
+    if (this.hrHistory.length > HR_HISTORY_SIZE) {
+      this.hrHistory.shift();
+    }
+
+    // Add to HRV history (pre-calculated on watch)
+    if (msg.hrv.rmssd > 0) {
+      this.hrvHistory.push({ rmssd: msg.hrv.rmssd, timestamp: msg.timestamp });
+      if (this.hrvHistory.length > HRV_HISTORY_SIZE) {
+        this.hrvHistory.shift();
+      }
+    }
   }
 
   // ── Processing Loop ─────────────────────────────────────────────

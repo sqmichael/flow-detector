@@ -17,6 +17,44 @@ const WS_OPEN = 1; // WebSocket.OPEN constant
 
 const execAsync = promisify(exec);
 
+// ── ntfy.sh Push Notifications ───────────────────────────────────────
+
+const NTFY_TOPIC = process.env.NTFY_TOPIC || "flow-detector-x7k9m2";
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+
+/**
+ * Send push notification via ntfy.sh
+ * Works anywhere - delivers to phone via ntfy app
+ */
+export async function sendPushNotification(
+  title: string,
+  message: string,
+  priority: "low" | "default" | "high" = "default"
+): Promise<boolean> {
+  try {
+    const response = await fetch(NTFY_URL, {
+      method: "POST",
+      headers: {
+        "Title": title,
+        "Priority": priority === "high" ? "high" : priority === "low" ? "low" : "default",
+        "Tags": "heart,wave",
+      },
+      body: message,
+    });
+
+    if (response.ok) {
+      console.log(`[Interventions] Push sent: ${title}`);
+      return true;
+    } else {
+      console.log(`[Interventions] Push failed: ${response.status}`);
+      return false;
+    }
+  } catch (error) {
+    console.log(`[Interventions] Push error: ${error}`);
+    return false;
+  }
+}
+
 // ── Focus Mode Control (macOS) ──────────────────────────────────────
 
 /**
@@ -146,13 +184,17 @@ export async function triggerPhoneCall(
 // ── Notification Display ────────────────────────────────────────────
 
 /**
- * Display a macOS notification
+ * Display notification on Mac AND send push to phone
  */
 export async function showNotification(
   title: string,
   message: string,
   sound: boolean = true
 ): Promise<boolean> {
+  // Always send push notification (works anywhere)
+  await sendPushNotification(title, message, sound ? "default" : "low");
+
+  // Also try macOS notification (works when at computer)
   try {
     const soundOption = sound ? 'sound name "Ping"' : "";
     await execAsync(`
@@ -161,7 +203,7 @@ export async function showNotification(
     console.log(`[Interventions] Notification shown: ${title}`);
     return true;
   } catch (error) {
-    console.log(`[Interventions] Notification (simulated): ${title} - ${message}`);
+    // Not on macOS or osascript failed - push already sent, that's fine
     return true;
   }
 }

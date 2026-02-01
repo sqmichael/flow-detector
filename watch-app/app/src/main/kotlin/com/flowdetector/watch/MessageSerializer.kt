@@ -45,3 +45,39 @@ data class EdaMessage(
 ) {
     fun toJson(): String = json.encodeToString(this)
 }
+
+@Serializable
+data class HrAggregate(
+    val mean: Float,
+    val min: Int,
+    val max: Int,
+    val samples: Int
+)
+
+@Serializable
+data class HrvAggregate(
+    val rmssd: Float,
+    val sdnn: Float
+)
+
+@Serializable
+data class EdaAggregate(
+    val meanScl: Float,
+    val peakScl: Float
+)
+
+/**
+ * 30-second aggregated batch message.
+ * Reduces bandwidth from ~3-5 MB/day (1Hz) to ~200 KB/day.
+ */
+@Serializable
+data class BatchMessage(
+    val type: String = "batch",
+    val windowMs: Long = 30000,
+    val hr: HrAggregate,
+    val hrv: HrvAggregate,
+    val eda: EdaAggregate,
+    val timestamp: Long
+) {
+    fun toJson(): String = json.encodeToString(this)
+}

@@ -22,10 +22,15 @@ import com.samsung.android.service.health.tracking.HealthTrackingService
 import com.samsung.android.service.health.tracking.data.DataPoint
 import com.samsung.android.service.health.tracking.data.HealthTrackerType
 import com.samsung.android.service.health.tracking.data.ValueKey
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 /**
  * Foreground service that bridges Samsung Health Sensor SDK
@@ -42,6 +47,117 @@ class SensorService : LifecycleService() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "flow_sensor_channel"
         const val EXTRA_SERVER_URL = "server_url"
+        private const val BATCH_WINDOW_MS = 30_000L
+    }
+
+    // ── Batch Buffer ─────────────────────────────────────────────────
+
+    private data class HrSample(val bpm: Int, val timestamp: Long)
+    private data class IbiSample(val ibi: Int, val timestamp: Long)
+    private data class EdaSample(val scl: Float, val timestamp: Long)
+
+    private val hrBuffer = mutableListOf<HrSample>()
+    private val ibiBuffer = mutableListOf<IbiSample>()
+    private val edaBuffer = mutableListOf<EdaSample>()
+    private val bufferLock = Any()
+    private var batchJob: Job? = null
+
+    /**
+     * Calculate RMSSD (Root Mean Square of Successive Differences) from IBI values.
+     */
+    private fun calculateRmssd(ibiValues: List<Int>): Float {
+        if (ibiValues.size < 2) return 0f
+        var sumSquaredDiffs = 0.0
+        for (i in 1 until ibiValues.size) {
+            val diff = ibiValues[i] - ibiValues[i - 1]
+            sumSquaredDiffs += diff.toDouble().pow(2)
+        }
+        return sqrt(sumSquaredDiffs / (ibiValues.size - 1)).toFloat()
+    }
+
+    /**
+     * Calculate SDNN (Standard Deviation of NN intervals) from IBI values.
+     */
+    private fun calculateSdnn(ibiValues: List<Int>): Float {
+        if (ibiValues.size < 2) return 0f
+        val mean = ibiValues.average()
+        val variance = ibiValues.map { (it - mean).pow(2) }.average()
+        return sqrt(variance).toFloat()
+    }
+
+    /**
+     * Flush the current batch to WebSocket.
+     */
+    private fun flushBatch() {
+        val (hrSamples, ibiSamples, edaSamples) = synchronized(bufferLock) {
+            Triple(
+                hrBuffer.toList().also { hrBuffer.clear() },
+                ibiBuffer.toList().also { ibiBuffer.clear() },
+                edaBuffer.toList().also { edaBuffer.clear() }
+            )
+        }
+
+        // Need at least some HR samples to send a batch
+        if (hrSamples.isEmpty()) {
+            Log.d(TAG, "Skipping empty batch")
+            return
+        }
+
+        // HR aggregates
+        val hrValues = hrSamples.map { it.bpm }
+        val hrAggregate = HrAggregate(
+            mean = hrValues.average().toFloat(),
+            min = hrValues.minOrNull() ?: 0,
+            max = hrValues.maxOrNull() ?: 0,
+            samples = hrValues.size
+        )
+
+        // HRV from IBI (filter valid range 300-2000ms)
+        val validIbi = ibiSamples.map { it.ibi }.filter { it in 300..2000 }
+        val hrvAggregate = HrvAggregate(
+            rmssd = calculateRmssd(validIbi),
+            sdnn = calculateSdnn(validIbi)
+        )
+
+        // EDA aggregates
+        val sclValues = edaSamples.map { it.scl }
+        val edaAggregate = EdaAggregate(
+            meanScl = if (sclValues.isNotEmpty()) sclValues.average().toFloat() else 0f,
+            peakScl = sclValues.maxOrNull() ?: 0f
+        )
+
+        val batch = BatchMessage(
+            hr = hrAggregate,
+            hrv = hrvAggregate,
+            eda = edaAggregate,
+            timestamp = System.currentTimeMillis()
+        )
+
+        Log.i(TAG, "Sending batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
+                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}")
+        webSocketManager.send(batch.toJson())
+    }
+
+    /**
+     * Start the 30-second batch timer.
+     */
+    private fun startBatchTimer() {
+        batchJob?.cancel()
+        batchJob = lifecycleScope.launch {
+            while (isActive) {
+                delay(BATCH_WINDOW_MS)
+                flushBatch()
+            }
+        }
+    }
+
+    /**
+     * Stop the batch timer and flush remaining data.
+     */
+    private fun stopBatchTimer() {
+        batchJob?.cancel()
+        batchJob = null
+        flushBatch() // Send any remaining buffered data
     }
 
     private val binder = LocalBinder()
@@ -141,6 +257,9 @@ class SensorService : LifecycleService() {
     fun stopStreaming() {
         Log.i(TAG, "Stopping streaming")
 
+        // Stop batch timer and flush remaining data
+        stopBatchTimer()
+
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
@@ -222,48 +341,48 @@ class SensorService : LifecycleService() {
         webSocketManager.sensors = activeSensors
         _isStreaming.value = activeSensors.isNotEmpty()
         Log.i(TAG, "Active sensors: ${activeSensors.joinToString()}")
+
+        // Start 30-second batch timer
+        if (activeSensors.isNotEmpty()) {
+            startBatchTimer()
+            Log.i(TAG, "Batch timer started (${BATCH_WINDOW_MS / 1000}s windows)")
+        }
     }
 
     // --- Heart Rate Listener ---
 
     private val heartRateListener = object : HealthTracker.TrackerEventListener {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
-            lifecycleScope.launch {
-                for (dp in dataPoints) {
-                    try {
-                        val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
-                        val hrStatus = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
-                        if (hrStatus != 1) continue
+            val now = System.currentTimeMillis()
+            for (dp in dataPoints) {
+                try {
+                    val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
+                    val hrStatus = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
+                    if (hrStatus != 1) continue
 
-                        // IBI list may be empty (no beat detected in this window)
-                        var lastValidIbi: Int? = null
-                        try {
-                            val ibiList = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
-                            val ibiStatusList = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
-                            for (i in ibiList.indices) {
-                                if (i < ibiStatusList.size && ibiStatusList[i] == 0 && ibiList[i] != 0) {
-                                    lastValidIbi = ibiList[i]
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // IBI data not available in this packet — that's fine,
-                            // we still send the HR reading with ibi=null
-                            Log.d(TAG, "IBI data not available: ${e.message}")
-                        }
-
-                        val message = HeartRateMessage(
-                            bpm = hr,
-                            ibi = lastValidIbi,
-                            quality = 100,
-                            timestamp = System.currentTimeMillis()
-                        )
-                        webSocketManager.send(message.toJson())
-
-                        _heartRate.value = hr
-                        _lastIbi.value = lastValidIbi
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Skipping incomplete HR data point: ${e.message}")
+                    // Buffer HR sample
+                    synchronized(bufferLock) {
+                        hrBuffer.add(HrSample(hr, now))
                     }
+                    _heartRate.value = hr
+
+                    // Extract and buffer IBI values
+                    try {
+                        val ibiList = dp.getValue(ValueKey.HeartRateSet.IBI_LIST)
+                        val ibiStatusList = dp.getValue(ValueKey.HeartRateSet.IBI_STATUS_LIST)
+                        for (i in ibiList.indices) {
+                            if (i < ibiStatusList.size && ibiStatusList[i] == 0 && ibiList[i] != 0) {
+                                synchronized(bufferLock) {
+                                    ibiBuffer.add(IbiSample(ibiList[i], now))
+                                }
+                                _lastIbi.value = ibiList[i]
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "IBI data not available: ${e.message}")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping incomplete HR data point: ${e.message}")
                 }
             }
         }
@@ -281,25 +400,21 @@ class SensorService : LifecycleService() {
 
     private val edaListener = object : HealthTracker.TrackerEventListener {
         override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
-            lifecycleScope.launch {
-                for (dp in dataPoints) {
-                    try {
-                        val scl = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE)
-                        val status = dp.getValue(ValueKey.EdaSet.STATUS)
+            val now = System.currentTimeMillis()
+            for (dp in dataPoints) {
+                try {
+                    val scl = dp.getValue(ValueKey.EdaSet.SKIN_CONDUCTANCE)
+                    val status = dp.getValue(ValueKey.EdaSet.STATUS)
 
-                        // Only send valid EDA readings (status 0 = valid)
-                        if (status != 0) continue
+                    // Only buffer valid EDA readings (status 0 = valid)
+                    if (status != 0) continue
 
-                        val message = EdaMessage(
-                            scl = scl,
-                            timestamp = System.currentTimeMillis()
-                        )
-                        webSocketManager.send(message.toJson())
-
-                        _currentScl.value = scl
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Skipping incomplete EDA data point: ${e.message}")
+                    synchronized(bufferLock) {
+                        edaBuffer.add(EdaSample(scl, now))
                     }
+                    _currentScl.value = scl
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping incomplete EDA data point: ${e.message}")
                 }
             }
         }

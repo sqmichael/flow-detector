@@ -245,3 +245,34 @@ export const REFLECTION_PROMPTS = [
 
 export const CHECKIN_SCRIPT =
   "Hey. Just checking in. Want to walk and talk?";
+
+// ── Batch Message Protocol ──────────────────────────────────────────
+
+/**
+ * 30-second aggregated sensor batch from watch.
+ * Reduces data from ~3-5 MB/day (1Hz) to ~200 KB/day.
+ */
+export interface BatchMessage {
+  type: "batch";
+  /** Window duration in ms (always 30000) */
+  windowMs: number;
+  /** Heart rate aggregates */
+  hr: {
+    mean: number;
+    min: number;
+    max: number;
+    samples: number;
+  };
+  /** HRV metrics calculated on-watch from IBI data */
+  hrv: {
+    rmssd: number;
+    sdnn: number;
+  };
+  /** EDA (skin conductance) aggregates */
+  eda: {
+    meanScl: number;
+    peakScl: number;
+  };
+  /** Batch timestamp (end of window) */
+  timestamp: number;
+}

@@ -105,6 +105,11 @@ function handleWatchConnection(ws: WebSocket) {
         log(
           `Watch identified: ${watchDeviceName} (protocol v${msg.protocolVersion || "?"}), sensors: ${(msg.sensors || []).join(", ")}`
         );
+      } else if (msg.type === "batch") {
+        log(
+          `Batch: HR=${msg.hr?.mean?.toFixed?.(0) || "?"} (${msg.hr?.samples || 0} samples), ` +
+            `HRV=${msg.hrv?.rmssd?.toFixed?.(1) || "?"}ms, SCL=${msg.eda?.meanScl?.toFixed?.(2) || "?"}µS`
+        );
       } else {
         logVerbose(`Watch → browsers: ${msg.type}`);
       }
