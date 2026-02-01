@@ -422,11 +422,18 @@ class SensorService : LifecycleService() {
         }
 
         // PPG provides raw photoplethysmography data (green, IR, red channels)
+        // Note: PPG may be listed as supported but throw IllegalArgumentException on some devices
         if (HealthTrackerType.PPG_CONTINUOUS in supported) {
-            ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
-            ppgTracker?.setEventListener(ppgListener)
-            activeSensors.add("ppg")
-            Log.i(TAG, "PPG tracker subscribed")
+            try {
+                ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
+                ppgTracker?.setEventListener(ppgListener)
+                activeSensors.add("ppg")
+                Log.i(TAG, "PPG tracker subscribed")
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "PPG_CONTINUOUS listed as supported but getHealthTracker failed: ${e.message}")
+            } catch (e: Exception) {
+                Log.w(TAG, "PPG tracker subscription failed: ${e.message}")
+            }
         } else {
             Log.w(TAG, "PPG_CONTINUOUS not supported")
         }
