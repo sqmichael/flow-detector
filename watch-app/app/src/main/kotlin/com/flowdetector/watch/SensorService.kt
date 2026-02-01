@@ -106,13 +106,16 @@ class SensorService : LifecycleService() {
     /**
      * Calculate stillness score from accelerometer magnitude variance.
      * Returns 0-1, where 1 = perfectly still, 0 = very active.
-     * Uses stdDev threshold of 0.1 m/s² as reference for "movement".
+     * Uses stdDev threshold of 0.5 m/s² as reference for "movement".
+     * (0.1 was too sensitive - sensor noise alone caused stdDev > 0.1)
      */
     private fun calculateStillness(magnitudeStdDev: Float): Float {
         // Stillness = 1 - (stdDev / threshold), clamped to 0-1
-        // threshold of 0.1 m/s² corresponds to "noticeable movement"
-        val threshold = 0.1f
-        return (1f - (magnitudeStdDev / threshold)).coerceIn(0f, 1f)
+        // threshold of 0.5 m/s² is more tolerant of sensor noise while still detecting real movement
+        val threshold = 0.5f
+        val stillness = (1f - (magnitudeStdDev / threshold)).coerceIn(0f, 1f)
+        Log.d(TAG, "Stillness calc: stdDev=${magnitudeStdDev}, threshold=$threshold, stillness=$stillness")
+        return stillness
     }
 
     /**
