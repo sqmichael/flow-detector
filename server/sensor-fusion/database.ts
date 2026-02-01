@@ -35,6 +35,7 @@ export function initDatabase(): Database.Database {
   db.pragma("journal_mode = WAL");
 
   createTables(db);
+  runMigrations(db);
   return db;
 }
 
@@ -55,6 +56,53 @@ export function closeDatabase(): void {
   if (db) {
     db.close();
     db = null;
+  }
+}
+
+/**
+ * Check if a column exists in a table
+ */
+function columnExists(db: Database.Database, table: string, column: string): boolean {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return columns.some((c) => c.name === column);
+}
+
+/**
+ * Run migrations to add new columns to existing tables
+ */
+function runMigrations(db: Database.Database): void {
+  // Migration: Add PPG columns to watch_batches
+  if (!columnExists(db, "watch_batches", "ppg_green_mean")) {
+    db.exec(`
+      ALTER TABLE watch_batches ADD COLUMN ppg_green_mean REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_green_std REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_ir_mean REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_ir_std REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_red_mean REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_red_std REAL;
+      ALTER TABLE watch_batches ADD COLUMN ppg_samples INTEGER NOT NULL DEFAULT 0;
+    `);
+    console.log("[DB] Migration: Added PPG columns to watch_batches");
+  }
+
+  // Migration: Add Accelerometer columns to watch_batches
+  if (!columnExists(db, "watch_batches", "accel_magnitude_mean")) {
+    db.exec(`
+      ALTER TABLE watch_batches ADD COLUMN accel_magnitude_mean REAL;
+      ALTER TABLE watch_batches ADD COLUMN accel_magnitude_std REAL;
+      ALTER TABLE watch_batches ADD COLUMN accel_stillness REAL;
+      ALTER TABLE watch_batches ADD COLUMN accel_samples INTEGER NOT NULL DEFAULT 0;
+    `);
+    console.log("[DB] Migration: Added accelerometer columns to watch_batches");
+  }
+
+  // Migration: Add stillness/motion columns to fused_windows
+  if (!columnExists(db, "fused_windows", "watch_accel_stillness")) {
+    db.exec(`
+      ALTER TABLE fused_windows ADD COLUMN watch_accel_stillness REAL;
+      ALTER TABLE fused_windows ADD COLUMN motion_quality REAL;
+    `);
+    console.log("[DB] Migration: Added stillness columns to fused_windows");
   }
 }
 
@@ -271,8 +319,10 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     INSERT INTO watch_batches (
       session_id, window_start, window_end, hr_mean, hr_min, hr_max, hr_samples,
       hrv_rmssd, hrv_sdnn, hrv_samples, eda_mean_scl, eda_min_scl, eda_max_scl,
-      eda_samples, quality, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      eda_samples, ppg_green_mean, ppg_green_std, ppg_ir_mean, ppg_ir_std,
+      ppg_red_mean, ppg_red_std, ppg_samples, accel_magnitude_mean,
+      accel_magnitude_std, accel_stillness, accel_samples, quality, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -290,6 +340,17 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     data.eda_min_scl ?? null,
     data.eda_max_scl ?? null,
     data.eda_samples ?? 0,
+    data.ppg_green_mean ?? null,
+    data.ppg_green_std ?? null,
+    data.ppg_ir_mean ?? null,
+    data.ppg_ir_std ?? null,
+    data.ppg_red_mean ?? null,
+    data.ppg_red_std ?? null,
+    data.ppg_samples ?? 0,
+    data.accel_magnitude_mean ?? null,
+    data.accel_magnitude_std ?? null,
+    data.accel_stillness ?? null,
+    data.accel_samples ?? 0,
     quality,
     now
   );
@@ -310,6 +371,17 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     eda_min_scl: data.eda_min_scl ?? null,
     eda_max_scl: data.eda_max_scl ?? null,
     eda_samples: data.eda_samples ?? 0,
+    ppg_green_mean: data.ppg_green_mean ?? null,
+    ppg_green_std: data.ppg_green_std ?? null,
+    ppg_ir_mean: data.ppg_ir_mean ?? null,
+    ppg_ir_std: data.ppg_ir_std ?? null,
+    ppg_red_mean: data.ppg_red_mean ?? null,
+    ppg_red_std: data.ppg_red_std ?? null,
+    ppg_samples: data.ppg_samples ?? 0,
+    accel_magnitude_mean: data.accel_magnitude_mean ?? null,
+    accel_magnitude_std: data.accel_magnitude_std ?? null,
+    accel_stillness: data.accel_stillness ?? null,
+    accel_samples: data.accel_samples ?? 0,
     quality,
     created_at: now,
   };
@@ -386,8 +458,9 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
       session_id, window_start, window_end, eye_blink_rate, eye_gaze_stability,
       eye_average_ear, eye_flow_indicator, eye_window_count, eye_quality,
       watch_hr_mean, watch_hr_min, watch_hr_max, watch_hrv_rmssd, watch_hrv_sdnn,
-      watch_eda_mean_scl, watch_quality, combined_flow_score, tier, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      watch_eda_mean_scl, watch_accel_stillness, watch_quality, combined_flow_score,
+      motion_quality, tier, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -406,8 +479,10 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
     data.watch_hrv_rmssd ?? null,
     data.watch_hrv_sdnn ?? null,
     data.watch_eda_mean_scl ?? null,
+    data.watch_accel_stillness ?? null,
     data.watch_quality ?? 0.0,
     data.combined_flow_score ?? null,
+    data.motion_quality ?? null,
     data.tier ?? "eye-only",
     now
   );
@@ -429,8 +504,10 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
     watch_hrv_rmssd: data.watch_hrv_rmssd ?? null,
     watch_hrv_sdnn: data.watch_hrv_sdnn ?? null,
     watch_eda_mean_scl: data.watch_eda_mean_scl ?? null,
+    watch_accel_stillness: data.watch_accel_stillness ?? null,
     watch_quality: data.watch_quality ?? 0.0,
     combined_flow_score: data.combined_flow_score ?? null,
+    motion_quality: data.motion_quality ?? null,
     tier: data.tier ?? "eye-only",
     created_at: now,
   };

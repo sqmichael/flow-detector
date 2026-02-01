@@ -55,10 +55,14 @@ class SensorService : LifecycleService() {
     private data class HrSample(val bpm: Int, val timestamp: Long)
     private data class IbiSample(val ibi: Int, val timestamp: Long)
     private data class EdaSample(val scl: Float, val timestamp: Long)
+    private data class PpgSample(val green: Int, val ir: Int, val red: Int, val timestamp: Long)
+    private data class AccelSample(val x: Float, val y: Float, val z: Float, val timestamp: Long)
 
     private val hrBuffer = mutableListOf<HrSample>()
     private val ibiBuffer = mutableListOf<IbiSample>()
     private val edaBuffer = mutableListOf<EdaSample>()
+    private val ppgBuffer = mutableListOf<PpgSample>()
+    private val accelBuffer = mutableListOf<AccelSample>()
     private val bufferLock = Any()
     private var batchJob: Job? = null
 
@@ -86,14 +90,45 @@ class SensorService : LifecycleService() {
     }
 
     /**
+     * Calculate standard deviation of a list of floats.
+     */
+    private fun calculateStdDev(values: List<Float>): Float {
+        if (values.size < 2) return 0f
+        val mean = values.average()
+        val variance = values.map { (it - mean).pow(2) }.average()
+        return sqrt(variance).toFloat()
+    }
+
+    /**
+     * Calculate stillness score from accelerometer magnitude variance.
+     * Returns 0-1, where 1 = perfectly still, 0 = very active.
+     * Uses stdDev threshold of 0.1 m/s² as reference for "movement".
+     */
+    private fun calculateStillness(magnitudeStdDev: Float): Float {
+        // Stillness = 1 - (stdDev / threshold), clamped to 0-1
+        // threshold of 0.1 m/s² corresponds to "noticeable movement"
+        val threshold = 0.1f
+        return (1f - (magnitudeStdDev / threshold)).coerceIn(0f, 1f)
+    }
+
+    /**
      * Flush the current batch to WebSocket.
      */
     private fun flushBatch() {
-        val (hrSamples, ibiSamples, edaSamples) = synchronized(bufferLock) {
-            Triple(
+        val (hrSamples, ibiSamples, edaSamples, ppgSamples, accelSamples) = synchronized(bufferLock) {
+            data class BufferSnapshot(
+                val hr: List<HrSample>,
+                val ibi: List<IbiSample>,
+                val eda: List<EdaSample>,
+                val ppg: List<PpgSample>,
+                val accel: List<AccelSample>
+            )
+            BufferSnapshot(
                 hrBuffer.toList().also { hrBuffer.clear() },
                 ibiBuffer.toList().also { ibiBuffer.clear() },
-                edaBuffer.toList().also { edaBuffer.clear() }
+                edaBuffer.toList().also { edaBuffer.clear() },
+                ppgBuffer.toList().also { ppgBuffer.clear() },
+                accelBuffer.toList().also { accelBuffer.clear() }
             )
         }
 
@@ -126,15 +161,50 @@ class SensorService : LifecycleService() {
             peakScl = sclValues.maxOrNull() ?: 0f
         )
 
+        // PPG aggregates (optional - only if we have samples)
+        val ppgAggregate = if (ppgSamples.isNotEmpty()) {
+            val greenValues = ppgSamples.map { it.green.toFloat() }
+            val irValues = ppgSamples.map { it.ir.toFloat() }
+            val redValues = ppgSamples.map { it.red.toFloat() }
+            PpgAggregate(
+                greenMean = greenValues.average().toFloat(),
+                greenStd = calculateStdDev(greenValues),
+                irMean = irValues.average().toFloat(),
+                irStd = calculateStdDev(irValues),
+                redMean = redValues.average().toFloat(),
+                redStd = calculateStdDev(redValues),
+                samples = ppgSamples.size
+            )
+        } else null
+
+        // Accelerometer aggregates (optional - only if we have samples)
+        val accelAggregate = if (accelSamples.isNotEmpty()) {
+            // Calculate magnitude for each sample: sqrt(x² + y² + z²)
+            val magnitudes = accelSamples.map { sample ->
+                sqrt(sample.x.pow(2) + sample.y.pow(2) + sample.z.pow(2))
+            }
+            val magnitudeStd = calculateStdDev(magnitudes)
+            AccelAggregate(
+                magnitudeMean = magnitudes.average().toFloat(),
+                magnitudeStd = magnitudeStd,
+                stillness = calculateStillness(magnitudeStd),
+                samples = accelSamples.size
+            )
+        } else null
+
         val batch = BatchMessage(
             hr = hrAggregate,
             hrv = hrvAggregate,
             eda = edaAggregate,
+            ppg = ppgAggregate,
+            accel = accelAggregate,
             timestamp = System.currentTimeMillis()
         )
 
+        val ppgInfo = ppgAggregate?.let { " PPG=${it.samples}samples" } ?: ""
+        val accelInfo = accelAggregate?.let { " Stillness=${(it.stillness * 100).toInt()}%" } ?: ""
         Log.i(TAG, "Sending batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
-                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}")
+                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}$ppgInfo$accelInfo")
         webSocketManager.send(batch.toJson())
     }
 
@@ -197,6 +267,8 @@ class SensorService : LifecycleService() {
     private var healthTrackingService: HealthTrackingService? = null
     private var heartRateTracker: HealthTracker? = null
     private var edaTracker: HealthTracker? = null
+    private var ppgTracker: HealthTracker? = null
+    private var accelTracker: HealthTracker? = null
     private lateinit var webSocketManager: WebSocketManager
 
     // --- Lifecycle ---
@@ -268,6 +340,10 @@ class SensorService : LifecycleService() {
         heartRateTracker = null
         edaTracker?.unsetEventListener()
         edaTracker = null
+        ppgTracker?.unsetEventListener()
+        ppgTracker = null
+        accelTracker?.unsetEventListener()
+        accelTracker = null
         try {
             healthTrackingService?.disconnectService()
         } catch (e: Exception) {
@@ -336,6 +412,26 @@ class SensorService : LifecycleService() {
         } else {
             Log.w(TAG, "EDA_CONTINUOUS not supported")
             _connectionError.value = "EDA sensor not available"
+        }
+
+        // PPG provides raw photoplethysmography data (green, IR, red channels)
+        if (HealthTrackerType.PPG_CONTINUOUS in supported) {
+            ppgTracker = service.getHealthTracker(HealthTrackerType.PPG_CONTINUOUS)
+            ppgTracker?.setEventListener(ppgListener)
+            activeSensors.add("ppg")
+            Log.i(TAG, "PPG tracker subscribed")
+        } else {
+            Log.w(TAG, "PPG_CONTINUOUS not supported")
+        }
+
+        // Accelerometer for stillness detection
+        if (HealthTrackerType.ACCELEROMETER_CONTINUOUS in supported) {
+            accelTracker = service.getHealthTracker(HealthTrackerType.ACCELEROMETER_CONTINUOUS)
+            accelTracker?.setEventListener(accelListener)
+            activeSensors.add("accelerometer")
+            Log.i(TAG, "Accelerometer tracker subscribed")
+        } else {
+            Log.w(TAG, "ACCELEROMETER_CONTINUOUS not supported")
         }
 
         webSocketManager.sensors = activeSensors
@@ -425,6 +521,85 @@ class SensorService : LifecycleService() {
 
         override fun onError(error: HealthTracker.TrackerError) {
             Log.e(TAG, "EDA tracker error: $error")
+        }
+    }
+
+    // --- PPG Listener ---
+
+    private val ppgListener = object : HealthTracker.TrackerEventListener {
+        override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
+            val now = System.currentTimeMillis()
+            for (dp in dataPoints) {
+                try {
+                    // Samsung SDK provides PPG as arrays of values per channel
+                    // PPG_GREEN, PPG_IR, PPG_RED are the raw sensor values
+                    val greenList = dp.getValue(ValueKey.PpgSet.PPG_GREEN)
+                    val irList = dp.getValue(ValueKey.PpgSet.PPG_IR)
+                    val redList = dp.getValue(ValueKey.PpgSet.PPG_RED)
+
+                    // Buffer each sample in the arrays
+                    val sampleCount = minOf(greenList.size, irList.size, redList.size)
+                    synchronized(bufferLock) {
+                        for (i in 0 until sampleCount) {
+                            ppgBuffer.add(PpgSample(
+                                green = greenList[i],
+                                ir = irList[i],
+                                red = redList[i],
+                                timestamp = now
+                            ))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping incomplete PPG data point: ${e.message}")
+                }
+            }
+        }
+
+        override fun onFlushCompleted() {
+            Log.d(TAG, "PPG tracker flush completed")
+        }
+
+        override fun onError(error: HealthTracker.TrackerError) {
+            Log.e(TAG, "PPG tracker error: $error")
+        }
+    }
+
+    // --- Accelerometer Listener ---
+
+    private val accelListener = object : HealthTracker.TrackerEventListener {
+        override fun onDataReceived(dataPoints: MutableList<DataPoint>) {
+            val now = System.currentTimeMillis()
+            for (dp in dataPoints) {
+                try {
+                    // Samsung SDK provides accelerometer as arrays of X, Y, Z values
+                    val xList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_X)
+                    val yList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Y)
+                    val zList = dp.getValue(ValueKey.AccelerometerSet.ACCELEROMETER_Z)
+
+                    // Buffer each sample in the arrays
+                    val sampleCount = minOf(xList.size, yList.size, zList.size)
+                    synchronized(bufferLock) {
+                        for (i in 0 until sampleCount) {
+                            accelBuffer.add(AccelSample(
+                                x = xList[i].toFloat(),
+                                y = yList[i].toFloat(),
+                                z = zList[i].toFloat(),
+                                timestamp = now
+                            ))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping incomplete accelerometer data point: ${e.message}")
+                }
+            }
+        }
+
+        override fun onFlushCompleted() {
+            Log.d(TAG, "Accelerometer tracker flush completed")
+        }
+
+        override fun onError(error: HealthTracker.TrackerError) {
+            Log.e(TAG, "Accelerometer tracker error: $error")
         }
     }
 

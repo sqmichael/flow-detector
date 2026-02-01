@@ -261,6 +261,35 @@ export function calculateEDAScore(
 }
 
 /**
+ * Calculate stillness flow component
+ *
+ * High stillness (low movement) indicates focused work, not restlessness.
+ * Stillness is already normalized 0-1 by the watch app.
+ */
+export function calculateStillnessScore(stillness: number): number {
+  // Stillness > 0.8 is excellent for flow
+  // Linear scaling with slight boost for very still
+  const score = Math.min(1.0, stillness * 1.1);
+
+  log(`Stillness: ${(stillness * 100).toFixed(0)}%, score=${score.toFixed(3)}`);
+
+  return score;
+}
+
+/**
+ * Calculate motion quality multiplier
+ *
+ * Low stillness (lots of movement) penalizes the flow score.
+ * Returns a value between 0.5 (heavy penalty) and 0.95 (minimal penalty).
+ */
+export function calculateMotionQuality(stillness: number): number {
+  // Linear interpolation: stillness 0 → 0.5, stillness 1 → 0.95
+  // Formula: 0.5 + (stillness * 0.45)
+  const quality = 0.5 + stillness * 0.45;
+  return Math.max(0.5, Math.min(0.95, quality));
+}
+
+/**
  * Calculate eye-based flow score using calibrated baselines
  *
  * Combines blink rate, gaze stability, and EAR scores
@@ -346,12 +375,15 @@ export function calculateCombinedFlow(
   hrvMetrics: HRVMetrics | null,
   heartRate: number | null,
   workingBaseline: WorkingBaselineCalibration | null = null,
-  edaData: { scl: number } | null = null
+  edaData: { scl: number } | null = null,
+  stillnessData: { stillness: number } | null = null
 ): CombinedFlowMetrics {
   const timestamp = Date.now();
   const hasWatchData = hrvMetrics !== null;
   // EDA tier only activates when HRV is also present (three-tier requires both)
   const hasEdaData = edaData !== null && hrvMetrics !== null;
+  // Stillness tier activates when we have all other sensors
+  const hasStillnessData = stillnessData !== null && hasEdaData;
 
   // Calculate calibrated eye flow score
   const calibratedEyeScore = calculateCalibratedEyeFlowScore(eyeMetrics, workingBaseline);
@@ -363,7 +395,27 @@ export function calculateCombinedFlow(
   const gazeScore = calculateGazeStabilityScore(eyeMetrics.gazeStability, workingBaseline);
   const earScore = calculateEARScore(eyeMetrics.averageEAR, workingBaseline);
 
-  if (hasWatchData && hrvMetrics && hasEdaData && edaData) {
+  if (hasWatchData && hrvMetrics && hasEdaData && edaData && hasStillnessData && stillnessData) {
+    // Four-tier: Eye + HRV + EDA + Stillness
+    const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
+    const edaScore = calculateEDAScore(edaData.scl, workingBaseline);
+    const stillnessScore = calculateStillnessScore(stillnessData.stillness);
+
+    // Additive weights for four-tier
+    combinedFlowScore =
+      blinkScore * 0.20 +
+      gazeScore * 0.25 +
+      earScore * 0.08 +
+      hrvScore * 0.17 +
+      edaScore * 0.12 +
+      stillnessScore * 0.18;
+
+    // Apply motion quality as multiplicative modifier
+    const motionQuality = calculateMotionQuality(stillnessData.stillness);
+    combinedFlowScore = combinedFlowScore * motionQuality;
+
+    log(`Combined flow (Eye+HRV+EDA+Stillness): blink(${blinkScore.toFixed(3)})*0.20 + gaze(${gazeScore.toFixed(3)})*0.25 + ear(${earScore.toFixed(3)})*0.08 + hrv(${hrvScore.toFixed(3)})*0.17 + eda(${edaScore.toFixed(3)})*0.12 + stillness(${stillnessScore.toFixed(3)})*0.18 * motionQuality(${motionQuality.toFixed(3)}) = ${combinedFlowScore.toFixed(3)}`);
+  } else if (hasWatchData && hrvMetrics && hasEdaData && edaData) {
     // Three-tier: Eye + HRV + EDA
     const hrvScore = calculateHRVScore(hrvMetrics.rmssd, workingBaseline);
     const edaScore = calculateEDAScore(edaData.scl, workingBaseline);
@@ -412,10 +464,14 @@ export function calculateCombinedFlow(
     // EDA metrics
     scl: edaData?.scl ?? null,
 
+    // Stillness metrics
+    stillness: stillnessData?.stillness ?? null,
+
     // Combined
     combinedFlowScore,
     hasWatchData,
     hasEdaData,
+    hasStillnessData,
     timestamp,
   };
 }

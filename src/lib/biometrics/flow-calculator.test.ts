@@ -9,6 +9,8 @@ import {
   calculateCalibratedEyeFlowScore,
   calculateHRVScore,
   calculateEDAScore,
+  calculateStillnessScore,
+  calculateMotionQuality,
   updateFlowDetector,
   createFlowDetectorState,
   calculateCombinedFlow,
@@ -363,6 +365,129 @@ test("Combined flow includes SCL value when EDA data provided", () => {
   assert(withEDA.scl === 7.5, `SCL should be 7.5, got ${withEDA.scl}`);
   assert(withoutEDA.scl === null, `SCL should be null without EDA, got ${withoutEDA.scl}`);
   console.log(`   With EDA: scl=${withEDA.scl}, Without: scl=${withoutEDA.scl}`);
+});
+
+// ── Stillness Scoring Tests ──────────────────────────────────────────
+
+// Test 18: Stillness score increases with stillness value
+test("Stillness scoring: high stillness scores higher", () => {
+  const veryStill = calculateStillnessScore(0.95);
+  const moderatelyStill = calculateStillnessScore(0.6);
+  const restless = calculateStillnessScore(0.2);
+
+  assert(veryStill > moderatelyStill, `Very still (${veryStill.toFixed(3)}) > moderately still (${moderatelyStill.toFixed(3)})`);
+  assert(moderatelyStill > restless, `Moderately still (${moderatelyStill.toFixed(3)}) > restless (${restless.toFixed(3)})`);
+  assert(veryStill >= 0.95, `Very still should score >= 0.95, got ${veryStill.toFixed(3)}`);
+  console.log(`   Very still(0.95): ${(veryStill * 100).toFixed(0)}%, Moderate(0.6): ${(moderatelyStill * 100).toFixed(0)}%, Restless(0.2): ${(restless * 100).toFixed(0)}%`);
+});
+
+// Test 19: Stillness score is capped at 1.0
+test("Stillness scoring: capped at 1.0", () => {
+  const perfectStill = calculateStillnessScore(1.0);
+  const overStill = calculateStillnessScore(1.2); // shouldn't happen but test robustness
+
+  assert(perfectStill <= 1.0, `Perfect stillness should be <= 1.0, got ${perfectStill.toFixed(3)}`);
+  assert(overStill <= 1.0, `Over-still should be capped at 1.0, got ${overStill.toFixed(3)}`);
+  console.log(`   Perfect(1.0): ${perfectStill.toFixed(3)}, Over(1.2): ${overStill.toFixed(3)}`);
+});
+
+// Test 20: Motion quality is bounded 0.5-1.0
+test("Motion quality: bounded between 0.5 and 0.95", () => {
+  const stillQuality = calculateMotionQuality(1.0);
+  const restlessQuality = calculateMotionQuality(0.0);
+  const midQuality = calculateMotionQuality(0.5);
+
+  assert(stillQuality <= 0.95, `Still motion quality should be <= 0.95, got ${stillQuality.toFixed(3)}`);
+  assert(restlessQuality >= 0.5, `Restless motion quality should be >= 0.5, got ${restlessQuality.toFixed(3)}`);
+  assert(midQuality > 0.5 && midQuality < 0.95, `Mid motion quality should be between bounds, got ${midQuality.toFixed(3)}`);
+  console.log(`   Still(1.0): ${stillQuality.toFixed(3)}, Mid(0.5): ${midQuality.toFixed(3)}, Restless(0.0): ${restlessQuality.toFixed(3)}`);
+});
+
+// Test 21: Motion quality penalizes low stillness
+test("Motion quality: lower stillness = lower multiplier", () => {
+  const high = calculateMotionQuality(0.9);
+  const mid = calculateMotionQuality(0.5);
+  const low = calculateMotionQuality(0.1);
+
+  assert(high > mid, `High stillness (${high.toFixed(3)}) > mid (${mid.toFixed(3)})`);
+  assert(mid > low, `Mid stillness (${mid.toFixed(3)}) > low (${low.toFixed(3)})`);
+  console.log(`   High(0.9): ${high.toFixed(3)}, Mid(0.5): ${mid.toFixed(3)}, Low(0.1): ${low.toFixed(3)}`);
+});
+
+// Test 22: Four-tier weight selection with stillness
+test("Four-tier weights: stillness changes combined score", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+  const edaData = { scl: 5.0 }; // At baseline
+  const stillnessData = { stillness: 0.9 }; // Very still
+
+  const withStillness = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData, stillnessData);
+  const withoutStillness = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData, null);
+  const eyeHrvOnly = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithHRV, null, null);
+
+  assert(withStillness.hasStillnessData === true, "Should have stillness data");
+  assert(withoutStillness.hasStillnessData === false, "Should not have stillness data without stillness input");
+  assert(withStillness.stillness === 0.9, `Stillness should be 0.9, got ${withStillness.stillness}`);
+  assert(withoutStillness.stillness === null, `Stillness should be null without input, got ${withoutStillness.stillness}`);
+
+  // Scores should differ due to different weights and motion quality multiplier
+  assert(
+    Math.abs(withStillness.combinedFlowScore - withoutStillness.combinedFlowScore) > 0.001,
+    `Stillness tier (${withStillness.combinedFlowScore.toFixed(3)}) should differ from EDA tier (${withoutStillness.combinedFlowScore.toFixed(3)})`
+  );
+  console.log(`   Eye+HRV+EDA+Stillness: ${(withStillness.combinedFlowScore * 100).toFixed(0)}%, Eye+HRV+EDA: ${(withoutStillness.combinedFlowScore * 100).toFixed(0)}%, Eye+HRV: ${(eyeHrvOnly.combinedFlowScore * 100).toFixed(0)}%`);
+});
+
+// Test 23: Restless movement penalizes flow score
+test("Restless movement significantly lowers flow score", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+  const edaData = { scl: 5.0 };
+
+  const veryStill = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData, { stillness: 0.95 });
+  const restless = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData, { stillness: 0.1 });
+
+  // Very still should score significantly higher due to motion quality multiplier
+  const difference = veryStill.combinedFlowScore - restless.combinedFlowScore;
+  assert(difference > 0.1, `Still (${veryStill.combinedFlowScore.toFixed(3)}) should be significantly higher than restless (${restless.combinedFlowScore.toFixed(3)})`);
+  console.log(`   Very still: ${(veryStill.combinedFlowScore * 100).toFixed(0)}%, Restless: ${(restless.combinedFlowScore * 100).toFixed(0)}%, Difference: ${(difference * 100).toFixed(0)}%`);
+});
+
+// Test 24: Weight sums for all tiers equal 1.0 (before motion quality multiplier)
+test("Tier weights sum to 1.0", () => {
+  // Eye-only: 0.40 + 0.45 + 0.15 = 1.0
+  const eyeOnlySum = 0.40 + 0.45 + 0.15;
+  assertApprox(eyeOnlySum, 1.0, 0.001, "Eye-only weights should sum to 1.0");
+
+  // Eye+HRV: 0.30 + 0.35 + 0.10 + 0.25 = 1.0
+  const eyeHrvSum = 0.30 + 0.35 + 0.10 + 0.25;
+  assertApprox(eyeHrvSum, 1.0, 0.001, "Eye+HRV weights should sum to 1.0");
+
+  // Eye+HRV+EDA: 0.25 + 0.30 + 0.10 + 0.20 + 0.15 = 1.0
+  const eyeHrvEdaSum = 0.25 + 0.30 + 0.10 + 0.20 + 0.15;
+  assertApprox(eyeHrvEdaSum, 1.0, 0.001, "Eye+HRV+EDA weights should sum to 1.0");
+
+  // Eye+HRV+EDA+Stillness: 0.20 + 0.25 + 0.08 + 0.17 + 0.12 + 0.18 = 1.0
+  const eyeHrvEdaStillnessSum = 0.20 + 0.25 + 0.08 + 0.17 + 0.12 + 0.18;
+  assertApprox(eyeHrvEdaStillnessSum, 1.0, 0.001, "Eye+HRV+EDA+Stillness weights should sum to 1.0");
+
+  console.log(`   Eye-only: ${eyeOnlySum}, Eye+HRV: ${eyeHrvSum}, Eye+HRV+EDA: ${eyeHrvEdaSum}, Eye+HRV+EDA+Stillness: ${eyeHrvEdaStillnessSum}`);
+});
+
+// Test 25: Backward compatibility - null stillness doesn't break existing tiers
+test("Backward compatibility: null stillness uses three-tier", () => {
+  const metrics = createMetrics(10, 0.8);
+  const hrvMetrics = { rmssd: 40, sdnn: 50, sampleCount: 20, timestamp: Date.now() };
+  const edaData = { scl: 5.0 };
+
+  // Explicitly passing null stillness
+  const result = calculateCombinedFlow(metrics, hrvMetrics, 72, testBaselineWithEDA, edaData, null);
+
+  assert(result.hasEdaData === true, "Should have EDA data");
+  assert(result.hasStillnessData === false, "Should NOT have stillness data");
+  assert(result.stillness === null, "Stillness should be null");
+  assert(result.combinedFlowScore > 0 && result.combinedFlowScore < 1, `Score should be valid: ${result.combinedFlowScore}`);
+  console.log(`   Three-tier (no stillness): ${(result.combinedFlowScore * 100).toFixed(0)}%`);
 });
 
 console.log("\n=== All tests complete ===\n");

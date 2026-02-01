@@ -8,7 +8,8 @@ A multi-sensor flow state detection system that combines biometrics (HR/HRV/EDA 
 ```
 ┌─────────────────┐                       ┌─────────────────┐
 │ Galaxy Watch 8  │                       │ MacBook Webcam  │
-│ (HR+IBI+EDA)    │                       │  (Eye Tracking) │
+│(HR+IBI+EDA+PPG+ │                       │  (Eye Tracking) │
+│  Accelerometer) │
 └────────┬────────┘                       └────────┬────────┘
          │ WebSocket                               │ Local
          │ via relay                               │ (MediaPipe)
@@ -74,13 +75,15 @@ Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
 - ✅ Galaxy Watch relay server (standalone Node, port 8765, binds 0.0.0.0 for LAN)
 - ✅ Watch stream browser hook with exponential backoff reconnection
 - ✅ EDA (skin conductance) scoring with Gaussian z-score model
-- ✅ Three-tier flow scoring: eye-only → eye+HRV → eye+HRV+EDA
+- ✅ PPG (photoplethysmography) raw sensor capture for future SpO2 estimation
+- ✅ Accelerometer-based stillness detection with motion quality multiplier
+- ✅ Four-tier flow scoring: eye-only → eye+HRV → eye+HRV+EDA → eye+HRV+EDA+stillness
 - ✅ 4-step calibration with personal working baseline (HRV + EDA baselines)
 - ✅ Z-score flow algorithm with Gaussian/sigmoid scoring curves
 - ✅ EMA temporal smoothing (alpha=0.15) to prevent score flickering
 - ✅ Flow confirmation requiring 2+ minutes sustained above threshold
 - ✅ Blink rate cold-start fix (blends with baseline for first 30 seconds)
-- ✅ Algorithm test suite (17 tests, all passing)
+- ✅ Algorithm test suite (25 tests, all passing)
 - ✅ Graceful degradation: immediate tier drop-back when sensors disconnect
 - ✅ Galaxy Watch Kotlin app (watch-app/) — Compose UI, Samsung Health SDK, WebSocket with backoff
 - ✅ End-to-end verified: Watch → Relay → Browser dashboard (HR + IBI/RMSSD + EDA/SCL all flowing)
@@ -125,18 +128,21 @@ The algorithm uses **z-score normalization** against personal baselines captured
 - **EAR** — Gaussian curve centered at z=0 (close to baseline = comfortable engagement).
 - **HRV (RMSSD)** — Gaussian curve centered at z=-0.5 (slightly below baseline = engaged but calm). Width 1.2 (broad, since HRV is noisy). Falls back to absolute thresholds if no HRV baseline captured.
 - **EDA (SCL)** — Gaussian curve centered at z=0 (moderate arousal near baseline = flow). Width 1.0 (`EDA_SCORE_GAUSSIAN_WIDTH` constant). Falls back to absolute thresholds (2-10 µS = 0.8, 1-15 µS = 0.6, else 0.4) if no EDA baseline captured.
+- **Stillness** — Linear score where higher stillness = better for flow. Calculated from accelerometer magnitude variance. Applied as additive component (weight 0.18) plus multiplicative motion quality modifier (0.5-0.95).
 
-**Three-tier weight system (automatic based on available sensors):**
+**Four-tier weight system (automatic based on available sensors):**
 
-| Signal | Eye-Only | Eye+HRV | Eye+HRV+EDA |
-|--------|----------|---------|-------------|
-| Gaze stability | 0.45 | 0.35 | 0.30 |
-| Blink rate | 0.40 | 0.30 | 0.25 |
-| EAR | 0.15 | 0.10 | 0.10 |
-| HRV (RMSSD) | -- | 0.25 | 0.20 |
-| EDA (SCL) | -- | -- | 0.15 |
+| Signal | Eye-Only | Eye+HRV | Eye+HRV+EDA | Eye+HRV+EDA+Stillness |
+|--------|----------|---------|-------------|----------------------|
+| Gaze stability | 0.45 | 0.35 | 0.30 | 0.25 |
+| Blink rate | 0.40 | 0.30 | 0.25 | 0.20 |
+| EAR | 0.15 | 0.10 | 0.10 | 0.08 |
+| HRV (RMSSD) | -- | 0.25 | 0.20 | 0.17 |
+| EDA (SCL) | -- | -- | 0.15 | 0.12 |
+| Stillness | -- | -- | -- | 0.18 |
+| **Motion Quality** | -- | -- | -- | ×(0.5-0.95) |
 
-EDA gets conservative weight (0.15) because wrist-based skin conductance is noisier than finger/palm electrodes. When a sensor disconnects mid-session, the system immediately drops back to the next available tier. EMA smoothing on the final score (alpha=0.15) prevents abrupt score jumps.
+The stillness tier uses stillness as both an additive component (0.18 weight) and a multiplicative motion quality modifier (0.5-0.95) that penalizes restless movement. EDA gets conservative weight because wrist-based skin conductance is noisier than finger/palm electrodes. When a sensor disconnects mid-session, the system immediately drops back to the next available tier. EMA smoothing on the final score (alpha=0.15) prevents abrupt score jumps.
 
 **Temporal smoothing:** EMA with alpha=0.15 prevents raw score volatility from causing UI flickering.
 
@@ -151,11 +157,14 @@ SDK: Samsung Health Sensor SDK (samsung-health-sensor-api.aar)
 Trackers:
 - HealthTrackerType.HEART_RATE_CONTINUOUS (HR + IBI, 1 Hz)
 - HealthTrackerType.EDA_CONTINUOUS (SCL in microsiemens, 1 Hz)
+- HealthTrackerType.PPG_CONTINUOUS (green, IR, red channels, ~25 Hz)
+- HealthTrackerType.ACCELEROMETER_CONTINUOUS (x, y, z axes, ~50 Hz)
 
 Message Protocol (named fields, discriminated union on "type"):
 Handshake: { type: "handshake", protocolVersion: 1, deviceName, sensors, timestamp }
 HR:        { type: "hr", bpm, ibi, quality, timestamp }
 EDA:       { type: "eda", scl, timestamp }
+Batch:     { type: "batch", windowMs: 30000, hr, hrv, eda, ppg?, accel?, timestamp }
 
 Reconnection: Exponential backoff 1s → 2s → 4s → ... → 30s max
 
@@ -190,7 +199,7 @@ The watch app is a WebSocket CLIENT that connects to the relay server on the Mac
 ### 1. Galaxy Watch 8 (Custom App - COMPLETE)
 - **Platform**: Wear OS 4+ with Samsung Health Sensor SDK
 - **Protocol**: WebSocket client → relay server (port 8765) → browser
-- **Data**: Heart Rate + IBI + EDA (skin conductance)
+- **Data**: Heart Rate + IBI + EDA + PPG (raw) + Accelerometer (stillness)
 - **Status**: End-to-end verified on Galaxy Watch 8 (sole data source for dashboard)
 
 ### 1b. Decathlon HRM Armband (BLE - DORMANT)

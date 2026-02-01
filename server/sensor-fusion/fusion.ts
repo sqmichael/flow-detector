@@ -79,8 +79,12 @@ function aggregateEyeMetrics(windows: EyeMetricsRow[]): {
 function determineTier(
   hasEyeData: boolean,
   hasHRV: boolean,
-  hasEDA: boolean
+  hasEDA: boolean,
+  hasStillness: boolean = false
 ): string {
+  if (hasEyeData && hasHRV && hasEDA && hasStillness) {
+    return "eye+hrv+eda+stillness";
+  }
   if (hasEyeData && hasHRV && hasEDA) {
     return "eye+hrv+eda";
   }
@@ -88,6 +92,27 @@ function determineTier(
     return "eye+hrv";
   }
   return "eye-only";
+}
+
+/**
+ * Calculate stillness score (0-1, higher = better for flow)
+ * High stillness indicates focus, not restlessness
+ */
+function scoreStillness(stillness: number): number {
+  // Stillness > 0.8 is good for flow
+  // Linear scaling with slight boost for very still
+  return Math.min(1.0, stillness * 1.1);
+}
+
+/**
+ * Calculate motion quality multiplier (0.5-0.95)
+ * Low stillness (movement) penalizes the flow score
+ */
+function calculateMotionQuality(stillness: number): number {
+  // Linear interpolation: stillness 0 → 0.5, stillness 1 → 0.95
+  // Formula: 0.5 + (stillness * 0.45)
+  const quality = 0.5 + stillness * 0.45;
+  return Math.max(0.5, Math.min(0.95, quality));
 }
 
 /**
@@ -103,26 +128,31 @@ function calculateCombinedFlowScore(
   watchMetrics: {
     hrv_rmssd: number | null;
     eda_mean_scl: number | null;
+    accel_stillness: number | null;
   }
-): { score: number | null; tier: string } {
+): { score: number | null; tier: string; motionQuality: number | null } {
   const hasEye = eyeMetrics.gaze_stability !== null;
   const hasHRV = watchMetrics.hrv_rmssd !== null;
   const hasEDA = watchMetrics.eda_mean_scl !== null;
+  const hasStillness = watchMetrics.accel_stillness !== null;
 
   if (!hasEye) {
-    return { score: null, tier: "none" };
+    return { score: null, tier: "none", motionQuality: null };
   }
 
-  const tier = determineTier(hasEye, hasHRV, hasEDA);
+  const tier = determineTier(hasEye, hasHRV, hasEDA, hasStillness);
 
   // Use tier-specific weights from flow-calculator.ts
+  // New tier: eye+hrv+eda+stillness includes stillness as additive component
   let weights: Record<string, number>;
-  if (tier === "eye+hrv+eda") {
-    weights = { gaze: 0.30, blink: 0.25, ear: 0.10, hrv: 0.20, eda: 0.15 };
+  if (tier === "eye+hrv+eda+stillness") {
+    weights = { gaze: 0.25, blink: 0.20, ear: 0.08, hrv: 0.17, eda: 0.12, stillness: 0.18 };
+  } else if (tier === "eye+hrv+eda") {
+    weights = { gaze: 0.30, blink: 0.25, ear: 0.10, hrv: 0.20, eda: 0.15, stillness: 0 };
   } else if (tier === "eye+hrv") {
-    weights = { gaze: 0.35, blink: 0.30, ear: 0.10, hrv: 0.25, eda: 0 };
+    weights = { gaze: 0.35, blink: 0.30, ear: 0.10, hrv: 0.25, eda: 0, stillness: 0 };
   } else {
-    weights = { gaze: 0.45, blink: 0.40, ear: 0.15, hrv: 0, eda: 0 };
+    weights = { gaze: 0.45, blink: 0.40, ear: 0.15, hrv: 0, eda: 0, stillness: 0 };
   }
 
   // Simple scoring without calibration (0-1 range assumed for inputs)
@@ -151,7 +181,18 @@ function calculateCombinedFlowScore(
     score += edaScore * weights.eda;
   }
 
-  return { score: Math.max(0, Math.min(1, score)), tier };
+  // Stillness scoring: high stillness = good for flow
+  let motionQuality: number | null = null;
+  if (hasStillness && watchMetrics.accel_stillness !== null) {
+    const stillnessScore = scoreStillness(watchMetrics.accel_stillness);
+    score += stillnessScore * weights.stillness;
+
+    // Apply motion quality as multiplicative modifier
+    motionQuality = calculateMotionQuality(watchMetrics.accel_stillness);
+    score = score * motionQuality;
+  }
+
+  return { score: Math.max(0, Math.min(1, score)), tier, motionQuality };
 }
 
 /**
@@ -172,7 +213,7 @@ export function createFusedWindow(
   const watch = watchBatches.length > 0 ? watchBatches[0] : null;
 
   // Calculate combined score
-  const { score, tier } = calculateCombinedFlowScore(
+  const { score, tier, motionQuality } = calculateCombinedFlowScore(
     {
       gaze_stability: eyeAgg.gaze_stability,
       blink_rate: eyeAgg.blink_rate,
@@ -181,6 +222,7 @@ export function createFusedWindow(
     {
       hrv_rmssd: watch?.hrv_rmssd ?? null,
       eda_mean_scl: watch?.eda_mean_scl ?? null,
+      accel_stillness: watch?.accel_stillness ?? null,
     }
   );
 
@@ -200,8 +242,10 @@ export function createFusedWindow(
     watch_hrv_rmssd: watch?.hrv_rmssd ?? null,
     watch_hrv_sdnn: watch?.hrv_sdnn ?? null,
     watch_eda_mean_scl: watch?.eda_mean_scl ?? null,
+    watch_accel_stillness: watch?.accel_stillness ?? null,
     watch_quality: watch?.quality ?? 0,
     combined_flow_score: score,
+    motion_quality: motionQuality,
     tier,
   };
 
