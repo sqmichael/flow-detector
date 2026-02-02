@@ -26,6 +26,7 @@ import {
   disableFocusMode,
 } from "./interventions";
 import { InterventionLogger } from "./logger";
+import { decideIntervention, buildReasoningInput } from "./reasoning";
 import {
   DEFAULT_CONFIG,
   type AmbientAgentConfig,
@@ -420,10 +421,27 @@ export class AmbientAgent {
 
     // Enter flow mode
     if (detection.shouldEnterFlowMode && !this.state.flowProtection.inFlowMode) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "flow",
+        `Stable HR (variance ${detection.hrVariance.toFixed(1)} bpm) for ${detection.stableMinutes} minutes`,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday,
+        { stableMinutes: detection.stableMinutes }
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Flow: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.flowProtection.inFlowMode = true;
       this.state.flowProtection.flowModeStartedAt = Date.now();
 
-      const intervention = createIntervention("flow_protection", "Stable HR for 30+ minutes", {
+      const intervention = createIntervention("flow_protection", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
         flowDurationMinutes: detection.stableMinutes,
@@ -476,16 +494,37 @@ export class AmbientAgent {
 
     // Trigger check-in
     if (detection.shouldTriggerCheckin) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "stress",
+        `Elevated HR + suppressed HRV for ${detection.elevatedMinutes} minutes`,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday,
+        { elevatedMinutes: detection.elevatedMinutes }
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Stress: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.stressDetection.checkinOfferedToday = true;
 
       const intervention = createIntervention(
         "proactive_checkin",
-        `Elevated HR + suppressed HRV for ${detection.elevatedMinutes} minutes`,
+        decision.reasoning,
         {
           hr: this.state.currentHR ?? undefined,
           hrv: this.state.currentHRV ?? undefined,
         }
       );
+      // Use LLM's custom message if provided
+      if (decision.message) {
+        intervention.trigger.reason = decision.message;
+      }
 
       this.state.interventionsToday.push(intervention);
       await this.logger.logIntervention(intervention);
@@ -508,10 +547,26 @@ export class AmbientAgent {
     );
 
     if (trigger.shouldTrigger) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "recovery",
+        trigger.reason,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Recovery: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.eveningReflection.reflectionOfferedToday = true;
       this.state.eveningReflection.reflectionOfferedAt = Date.now();
 
-      const intervention = createIntervention("evening_reflection", trigger.reason, {
+      const intervention = createIntervention("evening_reflection", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
       });
