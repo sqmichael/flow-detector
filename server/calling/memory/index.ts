@@ -4,6 +4,7 @@
  * Two-tier memory for cross-session context:
  * - Themes: Topics from calls with 4-week activity-based decay
  * - Preferences: Permanent user preferences
+ * - User state: Warmth level, interest tracking, onboarding status
  */
 
 export * from "./types";

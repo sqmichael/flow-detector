@@ -264,6 +264,162 @@ test("saveTheme deduplicates by theme name", () => {
   assert(themes[0].context === "context 2", "Should update context");
 });
 
+// User state tests
+import {
+  getUserState,
+  updateUserState,
+  recordSuccessfulCall,
+  recordRipcord,
+  completeOnboarding,
+  getWarmthDescription,
+  saveUserState,
+} from "./service";
+import { DEFAULT_USER_STATE } from "./types";
+
+function cleanupUserState() {
+  const db = getDb();
+  // Ensure table exists before trying to delete
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+  db.exec("DELETE FROM user_state");
+}
+
+test("getUserState returns default state initially", () => {
+  cleanupUserState();
+  const state = getUserState();
+  assert(state.warmth_level === 0, "Should start at warmth 0");
+  assert(state.onboarding_complete === false, "Onboarding should be incomplete");
+});
+
+test("recordSuccessfulCall increases warmth", () => {
+  cleanupUserState();
+  getUserState(); // Initialize
+  const before = getUserState().warmth_level;
+  recordSuccessfulCall();
+  const after = getUserState().warmth_level;
+  assert(after > before, "Warmth should increase");
+});
+
+test("recordRipcord does not decrease warmth", () => {
+  cleanupUserState();
+  getUserState(); // Initialize
+  recordSuccessfulCall(); // Increase warmth first
+  const before = getUserState().warmth_level;
+  recordRipcord();
+  const after = getUserState().warmth_level;
+  assert(after === before, "Warmth should not decrease after ripcord");
+});
+
+test("completeOnboarding sets warmth to 1", () => {
+  cleanupUserState();
+  getUserState(); // Initialize
+  completeOnboarding();
+  const state = getUserState();
+  assert(state.warmth_level === 1, "Should be at warmth level 1");
+  assert(state.onboarding_complete === true, "Onboarding should be complete");
+});
+
+test("getWarmthDescription returns correct labels", () => {
+  assert(getWarmthDescription(0) === "onboarding", "Level 0 is onboarding");
+  assert(getWarmthDescription(0.5) === "onboarding", "Level 0.5 is onboarding");
+  assert(getWarmthDescription(1) === "crisp", "Level 1 is crisp");
+  assert(getWarmthDescription(1.5) === "crisp", "Level 1.5 is crisp");
+  assert(getWarmthDescription(2) === "familiar", "Level 2 is familiar");
+  assert(getWarmthDescription(3) === "trusted", "Level 3 is trusted");
+});
+
+// Edge case tests (from Codex review)
+import { calculateInterestLevel } from "./service";
+import { INTEREST_THRESHOLDS } from "./types";
+
+test("calculateInterestLevel returns level 0 before onboarding complete", () => {
+  cleanupUserState();
+  getUserState(); // Initialize with onboarding_complete: false
+  // Even if enough time passes, should not trigger check-in
+  const db = getDb();
+  const state = getUserState();
+  // Set last_engagement far in the past
+  db.prepare("UPDATE user_state SET value = ? WHERE key = ?").run(
+    JSON.stringify({ ...state, last_engagement: Date.now() - (8 * 7 * 24 * 60 * 60 * 1000) }), // 8 weeks ago
+    "user_state"
+  );
+  const result = calculateInterestLevel();
+  assert(result.shouldCheckin === false, "Should not check in before onboarding");
+});
+
+test("calculateInterestLevel works after onboarding complete", () => {
+  cleanupUserState();
+  completeOnboarding(); // Sets onboarding_complete: true and warmth to 1
+  const db = getDb();
+  const state = getUserState();
+  // Set last_engagement 2 weeks ago
+  db.prepare("UPDATE user_state SET value = ? WHERE key = ?").run(
+    JSON.stringify({ ...state, last_engagement: Date.now() - INTEREST_THRESHOLDS.ATTENTIVE - 1000 }),
+    "user_state"
+  );
+  const result = calculateInterestLevel();
+  assert(result.level === 2, "Should be at attentive level");
+  assert(result.shouldCheckin === true, "Should suggest check-in");
+});
+
+test("getUserState handles corrupted JSON gracefully", () => {
+  cleanupUserState();
+  const db = getDb();
+  // Insert corrupted JSON
+  db.prepare("INSERT OR REPLACE INTO user_state (key, value) VALUES (?, ?)").run(
+    "user_state",
+    "not valid json {"
+  );
+  // Should not throw, should return fresh state
+  const state = getUserState();
+  assert(state.warmth_level === 0, "Should return default warmth");
+  assert(state.last_engagement > 0, "Should have valid timestamp");
+});
+
+test("getUserState fixes invalid interest_checkin_sent array", () => {
+  cleanupUserState();
+  const db = getDb();
+  // Insert state with wrong array length
+  db.prepare("INSERT OR REPLACE INTO user_state (key, value) VALUES (?, ?)").run(
+    "user_state",
+    JSON.stringify({ ...DEFAULT_USER_STATE, interest_checkin_sent: [true] }) // Wrong length
+  );
+  const state = getUserState();
+  assert(
+    Array.isArray(state.interest_checkin_sent) && state.interest_checkin_sent.length === 3,
+    "Should fix array to length 3"
+  );
+});
+
+test("getUserState fixes invalid warmth_level", () => {
+  cleanupUserState();
+  const db = getDb();
+  // Insert state with non-numeric warmth
+  db.prepare("INSERT OR REPLACE INTO user_state (key, value) VALUES (?, ?)").run(
+    "user_state",
+    JSON.stringify({ ...DEFAULT_USER_STATE, warmth_level: "invalid" })
+  );
+  const state = getUserState();
+  assert(typeof state.warmth_level === "number", "Should be a number");
+  assert(state.warmth_level === 0, "Should default to 0");
+});
+
+test("executeCommand ripcord updates user state", () => {
+  cleanupUserState();
+  getUserState(); // Initialize
+  recordSuccessfulCall(); // Set calls_since_ripcord to 1
+  const before = getUserState();
+  assert(before.calls_since_ripcord === 1, "Should have 1 call before ripcord");
+  executeCommand({ type: "ripcord" });
+  const after = getUserState();
+  assert(after.ripcord_count === 1, "Ripcord count should be 1");
+  assert(after.calls_since_ripcord === 0, "Calls since ripcord should reset to 0");
+});
+
 // Cleanup
 closeDb();
 
