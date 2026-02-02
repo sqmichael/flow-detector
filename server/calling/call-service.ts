@@ -1,7 +1,7 @@
 /**
  * Ambient Empathic Agent - Call Service
  *
- * Triggers outbound calls via Twilio + Hume EVI
+ * Triggers outbound calls via Twilio + Hume EVI with memory layer.
  *
  * Usage:
  *   npm run call-service
@@ -13,11 +13,26 @@
  *   HUME_API_KEY
  *   HUME_CONFIG_ID
  *   USER_PHONE_NUMBER
+ *   OPENROUTER_API_KEY (for theme extraction)
  */
 
 import express from 'express';
 import cors from 'cors';
 import twilio from 'twilio';
+import {
+  getDb,
+  closeDb,
+  expireOldThemes,
+  getMemorySummary,
+  saveTheme,
+  touchTheme,
+  findThemeByKeyword,
+  prepareCallWithMemory,
+  extractTheme,
+  HumeWebhookEvent,
+  extractTranscriptText,
+  MIN_CALL_DURATION_FOR_THEME,
+} from './memory';
 
 const app = express();
 app.use(cors());
@@ -45,8 +60,19 @@ if (missingVars.length > 0) {
   console.error('HUME_API_KEY=your_hume_api_key');
   console.error('HUME_CONFIG_ID=your_hume_config_id');
   console.error('USER_PHONE_NUMBER=your_phone_number');
+  console.error('OPENROUTER_API_KEY=your_openrouter_key (optional, for theme extraction)');
   process.exit(1);
 }
+
+// Initialize memory layer
+console.log('[Memory] Initializing database...');
+getDb(); // This initializes the database
+const expiredCount = expireOldThemes();
+if (expiredCount > 0) {
+  console.log(`[Memory] Cleaned up ${expiredCount} expired themes`);
+}
+const summary = getMemorySummary();
+console.log(`[Memory] Loaded ${summary.themes.length} themes, ${summary.preferences.length} preferences`);
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -61,11 +87,11 @@ interface CallTrigger {
 /**
  * POST /call/trigger
  *
- * Trigger an outbound call to the user
+ * Trigger an outbound call to the user with memory context injected.
  *
  * Body:
  *   reason: "stress_check_in" | "user_requested"
- *   context: optional context string
+ *   context: optional context string (deprecated, use memory layer)
  */
 app.post('/call/trigger', async (req, res) => {
   const { reason = 'user_requested', context = '' }: CallTrigger = req.body;
@@ -76,9 +102,11 @@ app.post('/call/trigger', async (req, res) => {
   }
 
   try {
-    // Hume EVI endpoint for Twilio integration
-    // This URL tells Twilio to connect the call to Hume's EVI system
-    const humeEviUrl = `https://api.hume.ai/v0/evi/twilio?config_id=${process.env.HUME_CONFIG_ID}&api_key=${process.env.HUME_API_KEY}`;
+    // Prepare call with memory-injected config
+    const humeEviUrl = await prepareCallWithMemory(
+      process.env.HUME_CONFIG_ID!,
+      process.env.HUME_API_KEY!
+    );
 
     // Initiate outbound call via Twilio
     const call = await twilioClient.calls.create({
@@ -98,11 +126,11 @@ app.post('/call/trigger', async (req, res) => {
       success: true,
       callSid: call.sid,
       status: call.status,
-      reason
+      reason,
+      memoryInjected: !summary.isEmpty
     });
 
   } catch (error: unknown) {
-    // Narrow error type for safe access and deterministic messages
     const errorMessage =
       error instanceof Error
         ? error.message
@@ -140,27 +168,113 @@ app.post('/call/status', (req, res) => {
 });
 
 /**
+ * POST /call/hume-webhook
+ *
+ * Webhook for Hume EVI events (chat_started, chat_ended).
+ * Processes transcripts for theme extraction after substantive calls.
+ */
+app.post('/call/hume-webhook', async (req, res) => {
+  const event = req.body as HumeWebhookEvent;
+
+  console.log(`[Hume Webhook] Event: ${event.type}, Session: ${event.session_id}`);
+
+  if (event.type === 'chat_ended') {
+    const duration = event.duration_seconds || 0;
+    console.log(`[Hume Webhook] Call ended, duration: ${duration}s`);
+
+    // Only extract themes from substantive calls (>3 minutes)
+    if (duration >= MIN_CALL_DURATION_FOR_THEME && event.transcript) {
+      const transcriptText = extractTranscriptText(event);
+
+      if (transcriptText.length > 100) {
+        console.log('[Hume Webhook] Extracting theme from transcript...');
+
+        try {
+          const extracted = await extractTheme(transcriptText);
+
+          if (extracted) {
+            // Check if this matches an existing theme
+            const existing = findThemeByKeyword(extracted.theme);
+
+            if (existing) {
+              // Touch existing theme to extend its life
+              touchTheme(existing.id);
+              console.log(`[Memory] Touched existing theme: ${existing.theme}`);
+            } else {
+              // Save as new theme
+              const saved = saveTheme(extracted.theme, extracted.context, 'call');
+              console.log(`[Memory] Saved new theme: ${saved.theme}`);
+            }
+          } else {
+            console.log('[Hume Webhook] No theme extracted (confidence too low or no clear topic)');
+          }
+        } catch (error) {
+          console.error('[Hume Webhook] Theme extraction failed:', error);
+        }
+      }
+    }
+  }
+
+  res.sendStatus(200);
+});
+
+/**
+ * GET /memory
+ *
+ * Returns current memory contents (for debugging/transparency)
+ */
+app.get('/memory', (req, res) => {
+  const summary = getMemorySummary();
+  res.json(summary);
+});
+
+/**
  * GET /health
  *
  * Health check endpoint
  */
 app.get('/health', (req, res) => {
+  const memorySummary = getMemorySummary();
   res.json({
     status: 'ok',
     service: 'ambient-empathic-agent-calling',
     twilioConfigured: !!process.env.TWILIO_ACCOUNT_SID,
-    humeConfigured: !!process.env.HUME_API_KEY
+    humeConfigured: !!process.env.HUME_API_KEY,
+    memory: {
+      themes: memorySummary.themes.length,
+      preferences: memorySummary.preferences.length
+    }
   });
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('\n[Shutdown] Closing database...');
+  closeDb();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n[Shutdown] Closing database...');
+  closeDb();
+  process.exit(0);
 });
 
 app.listen(PORT, () => {
   console.log(`\n🎯 Ambient Empathic Agent - Call Service`);
   console.log(`📞 Listening on http://localhost:${PORT}`);
+  console.log(`🧠 Memory layer active`);
   console.log(`\nEndpoints:`);
-  console.log(`  POST /call/trigger - Trigger outbound call`);
-  console.log(`  POST /call/status  - Call status webhook`);
-  console.log(`  GET  /health       - Health check`);
+  console.log(`  POST /call/trigger      - Trigger outbound call (with memory)`);
+  console.log(`  POST /call/status       - Call status webhook (Twilio)`);
+  console.log(`  POST /call/hume-webhook - Hume events webhook`);
+  console.log(`  GET  /memory            - View current memory`);
+  console.log(`  GET  /health            - Health check`);
   console.log(`\nTo trigger a test call:`);
-  console.log(`  curl -X POST http://localhost:${PORT}/call/trigger \\\n       -H "Content-Type: application/json" \\\n       -d '{"reason": "stress_check_in"}'`);
+  console.log(`  curl -X POST http://localhost:${PORT}/call/trigger \\`);
+  console.log(`       -H "Content-Type: application/json" \\`);
+  console.log(`       -d '{"reason": "stress_check_in"}'`);
+  console.log(`\nTo view memory:`);
+  console.log(`  curl http://localhost:${PORT}/memory`);
   console.log('');
 });
