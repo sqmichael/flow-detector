@@ -166,6 +166,7 @@ const CALL_SERVICE_URL = process.env.CALL_SERVICE_URL || "http://localhost:8766"
  */
 export async function triggerPhoneCall(
   phoneNumber: string | undefined,
+  reason: "stress_check_in" | "evening_reflection" | "interest_checkin" = "stress_check_in",
   script: string = CHECKIN_SCRIPT
 ): Promise<boolean> {
   try {
@@ -174,7 +175,7 @@ export async function triggerPhoneCall(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        reason: "stress_check_in",
+        reason,
         context: script,
       }),
     });
@@ -280,7 +281,7 @@ export async function executeIntervention(
       if (options.phoneNumber) {
         // Wait a few seconds for user to acknowledge haptic
         await new Promise((resolve) => setTimeout(resolve, 5000));
-        await triggerPhoneCall(options.phoneNumber);
+        await triggerPhoneCall(options.phoneNumber, "stress_check_in");
       }
       break;
 
