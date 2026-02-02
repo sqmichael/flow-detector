@@ -91,10 +91,13 @@ Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
 - ✅ UX Agent instructions (UX_AGENT.md) — verification process for cross-checking
 - ✅ PostToolUse hook for UX reminders on Write/Edit
 - ✅ AGENTS.md updated with dual-agent review process
-- ✅ **Ambient Agent** — Server-side intervention system (sensor-triggered vs fixed-time comparison)
+- ✅ **Ambient Agent** — Server-side intervention system (sensor-only triggers, no time fallbacks)
+- ✅ **LLM Reasoning Layer** — Cheap LLM (DeepSeek) judges intervention timing before delivery
 
 ### What's Next
 - **Field Testing** — Run the ambient agent prototype for 5-8 days to collect felt-experience ratings
+  - Interventions fire ONLY on physiological patterns (flow, stress, recovery)
+  - Use `fixed` mode as control condition for comparison
 
 ### Backlog (Call Service Improvements)
 - **Memory Layer** — Store conversation summaries, inject recent context into prompts before each call

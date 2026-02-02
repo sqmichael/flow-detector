@@ -24,8 +24,10 @@ import {
   executeIntervention,
   createIntervention,
   disableFocusMode,
+  sendPushNotification,
 } from "./interventions";
 import { InterventionLogger } from "./logger";
+import { decideIntervention, buildReasoningInput } from "./reasoning";
 import {
   DEFAULT_CONFIG,
   type AmbientAgentConfig,
@@ -119,6 +121,9 @@ export class AmbientAgent {
   // Processing interval
   private processingInterval: NodeJS.Timeout | null = null;
 
+  // Heartbeat interval (debug notifications)
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+
   constructor(config: Partial<AmbientAgentConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.hrvCalculator = new HRVCalculator();
@@ -195,6 +200,7 @@ export class AmbientAgent {
 
     this.connect();
     this.startProcessingLoop();
+    this.startHeartbeat();
   }
 
   stop(): void {
@@ -208,6 +214,11 @@ export class AmbientAgent {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
       this.processingInterval = null;
+    }
+
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
 
     if (this.ws) {
@@ -383,6 +394,33 @@ export class AmbientAgent {
     }, 10000);
   }
 
+  // ── Heartbeat (Debug) ──────────────────────────────────────────────
+
+  private startHeartbeat(): void {
+    // Send initial heartbeat after 10 seconds
+    setTimeout(() => this.sendHeartbeat(), 10000);
+
+    // Then every 60 minutes
+    this.heartbeatInterval = setInterval(() => {
+      this.sendHeartbeat();
+    }, 60 * 60 * 1000);
+  }
+
+  private async sendHeartbeat(): Promise<void> {
+    const hr = this.state.currentHR?.toFixed(0) ?? "---";
+    const hrv = this.state.currentHRV?.toFixed(0) ?? "---";
+    const scl = this.state.currentSCL?.toFixed(1) ?? "---";
+
+    const watchStatus = this.state.isWatchConnected ? "connected" : "disconnected";
+    const flowStatus = this.state.flowProtection.inFlowMode ? "IN FLOW" : `stable ${this.state.flowProtection.stableMinutes}m`;
+    const stressStatus = this.state.stressDetection.isElevated ? `ELEVATED ${this.state.stressDetection.elevatedMinutes}m` : "normal";
+
+    const message = `Watch: ${watchStatus} | HR: ${hr} | HRV: ${hrv}ms | SCL: ${scl}uS | Flow: ${flowStatus} | Stress: ${stressStatus}`;
+
+    await sendPushNotification("Heartbeat", message, "low");
+    this.log(`Heartbeat sent: ${message}`);
+  }
+
   private async processDetection(): Promise<void> {
     // Update baseline if we have enough data
     if (!this.state.baseline && this.hrHistory.length >= 30) {
@@ -420,10 +458,27 @@ export class AmbientAgent {
 
     // Enter flow mode
     if (detection.shouldEnterFlowMode && !this.state.flowProtection.inFlowMode) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "flow",
+        `Stable HR (variance ${detection.hrVariance.toFixed(1)} bpm) for ${detection.stableMinutes} minutes`,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday,
+        { stableMinutes: detection.stableMinutes }
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Flow: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.flowProtection.inFlowMode = true;
       this.state.flowProtection.flowModeStartedAt = Date.now();
 
-      const intervention = createIntervention("flow_protection", "Stable HR for 30+ minutes", {
+      const intervention = createIntervention("flow_protection", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
         flowDurationMinutes: detection.stableMinutes,
@@ -476,16 +531,37 @@ export class AmbientAgent {
 
     // Trigger check-in
     if (detection.shouldTriggerCheckin) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "stress",
+        `Elevated HR + suppressed HRV for ${detection.elevatedMinutes} minutes`,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday,
+        { elevatedMinutes: detection.elevatedMinutes }
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Stress: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.stressDetection.checkinOfferedToday = true;
 
       const intervention = createIntervention(
         "proactive_checkin",
-        `Elevated HR + suppressed HRV for ${detection.elevatedMinutes} minutes`,
+        decision.reasoning,
         {
           hr: this.state.currentHR ?? undefined,
           hrv: this.state.currentHRV ?? undefined,
         }
       );
+      // Use LLM's custom message if provided
+      if (decision.message) {
+        intervention.trigger.reason = decision.message;
+      }
 
       this.state.interventionsToday.push(intervention);
       await this.logger.logIntervention(intervention);
@@ -504,14 +580,31 @@ export class AmbientAgent {
       this.state.currentHRV,
       this.state.baseline,
       this.state.eveningReflection.reflectionOfferedToday,
-      this.config.eveningReflection
+      this.config.eveningReflection,
+      this.config.quietHours.timezoneOffset
     );
 
     if (trigger.shouldTrigger) {
+      // Ask LLM for judgment
+      const reasoningInput = buildReasoningInput(
+        "recovery",
+        trigger.reason,
+        { hr: this.state.currentHR, hrv: this.state.currentHRV, scl: this.state.currentSCL },
+        this.state.baseline,
+        this.state.interventionsToday
+      );
+
+      const decision = await decideIntervention(reasoningInput);
+
+      if (!decision.shouldIntervene) {
+        this.log(`Recovery: LLM skipped - ${decision.reasoning}`);
+        return;
+      }
+
       this.state.eveningReflection.reflectionOfferedToday = true;
       this.state.eveningReflection.reflectionOfferedAt = Date.now();
 
-      const intervention = createIntervention("evening_reflection", trigger.reason, {
+      const intervention = createIntervention("evening_reflection", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
       });

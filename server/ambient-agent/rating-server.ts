@@ -70,6 +70,14 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 });
 
 export function startRatingServer(): void {
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      log(`Port ${PORT} already in use - rating server skipped (another instance running)`);
+    } else {
+      log(`Server error: ${err.message}`);
+    }
+  });
+
   server.listen(PORT, "0.0.0.0", () => {
     log(`Listening on http://0.0.0.0:${PORT}`);
     log(`Rate endpoints: /rate/:id/good, /rate/:id/ok, /rate/:id/bad`);
