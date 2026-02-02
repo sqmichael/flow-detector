@@ -229,7 +229,7 @@ export function shouldTriggerEveningReflection(
     return { shouldTrigger: false, reason: "Outside evening window" };
   }
 
-  // Check for recovery state (can trigger earlier in window)
+  // Only trigger on actual recovery state detection - no time fallbacks
   const recovery = detectRecoveryState(currentHR, currentHRV, baseline, config);
   if (recovery.inRecovery) {
     return {
@@ -238,13 +238,7 @@ export function shouldTriggerEveningReflection(
     };
   }
 
-  // Also trigger at 8 PM if no recovery detected
-  const now = new Date();
-  if (now.getHours() >= 20) {
-    return { shouldTrigger: true, reason: "Evening window (8 PM)" };
-  }
-
-  return { shouldTrigger: false, reason: "Waiting for recovery or 8 PM" };
+  return { shouldTrigger: false, reason: "Waiting for recovery state" };
 }
 
 // ── Baseline Estimation ─────────────────────────────────────────────
