@@ -174,11 +174,16 @@ export function detectStressPattern(
 
 /**
  * Check if currently in the evening reflection window
+ * @param timezoneOffset - Hours offset from UTC (e.g., 8 for Singapore)
  */
-export function isInEveningWindow(config: EveningReflectionConfig): boolean {
+export function isInEveningWindow(
+  config: EveningReflectionConfig,
+  timezoneOffset: number = 0
+): boolean {
   const now = new Date();
-  const hour = now.getHours();
-  return hour >= config.windowStartHour && hour < config.windowEndHour;
+  const utcHour = now.getUTCHours();
+  const localHour = ((utcHour + timezoneOffset) % 24 + 24) % 24;
+  return localHour >= config.windowStartHour && localHour < config.windowEndHour;
 }
 
 /**
@@ -219,13 +224,14 @@ export function shouldTriggerEveningReflection(
   currentHRV: number | null,
   baseline: PersonalBaseline | null,
   reflectionOfferedToday: boolean,
-  config: EveningReflectionConfig
+  config: EveningReflectionConfig,
+  timezoneOffset: number = 0
 ): { shouldTrigger: boolean; reason: string } {
   if (reflectionOfferedToday) {
     return { shouldTrigger: false, reason: "Already offered today" };
   }
 
-  if (!isInEveningWindow(config)) {
+  if (!isInEveningWindow(config, timezoneOffset)) {
     return { shouldTrigger: false, reason: "Outside evening window" };
   }
 

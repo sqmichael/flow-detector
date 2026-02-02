@@ -24,6 +24,7 @@ import {
   executeIntervention,
   createIntervention,
   disableFocusMode,
+  sendPushNotification,
 } from "./interventions";
 import { InterventionLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
@@ -120,6 +121,9 @@ export class AmbientAgent {
   // Processing interval
   private processingInterval: NodeJS.Timeout | null = null;
 
+  // Heartbeat interval (debug notifications)
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+
   constructor(config: Partial<AmbientAgentConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.hrvCalculator = new HRVCalculator();
@@ -196,6 +200,7 @@ export class AmbientAgent {
 
     this.connect();
     this.startProcessingLoop();
+    this.startHeartbeat();
   }
 
   stop(): void {
@@ -209,6 +214,11 @@ export class AmbientAgent {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
       this.processingInterval = null;
+    }
+
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
 
     if (this.ws) {
@@ -384,6 +394,33 @@ export class AmbientAgent {
     }, 10000);
   }
 
+  // ── Heartbeat (Debug) ──────────────────────────────────────────────
+
+  private startHeartbeat(): void {
+    // Send initial heartbeat after 10 seconds
+    setTimeout(() => this.sendHeartbeat(), 10000);
+
+    // Then every 60 minutes
+    this.heartbeatInterval = setInterval(() => {
+      this.sendHeartbeat();
+    }, 60 * 60 * 1000);
+  }
+
+  private async sendHeartbeat(): Promise<void> {
+    const hr = this.state.currentHR?.toFixed(0) ?? "---";
+    const hrv = this.state.currentHRV?.toFixed(0) ?? "---";
+    const scl = this.state.currentSCL?.toFixed(1) ?? "---";
+
+    const watchStatus = this.state.isWatchConnected ? "connected" : "disconnected";
+    const flowStatus = this.state.flowProtection.inFlowMode ? "IN FLOW" : `stable ${this.state.flowProtection.stableMinutes}m`;
+    const stressStatus = this.state.stressDetection.isElevated ? `ELEVATED ${this.state.stressDetection.elevatedMinutes}m` : "normal";
+
+    const message = `Watch: ${watchStatus} | HR: ${hr} | HRV: ${hrv}ms | SCL: ${scl}uS | Flow: ${flowStatus} | Stress: ${stressStatus}`;
+
+    await sendPushNotification("Heartbeat", message, "low");
+    this.log(`Heartbeat sent: ${message}`);
+  }
+
   private async processDetection(): Promise<void> {
     // Update baseline if we have enough data
     if (!this.state.baseline && this.hrHistory.length >= 30) {
@@ -543,7 +580,8 @@ export class AmbientAgent {
       this.state.currentHRV,
       this.state.baseline,
       this.state.eveningReflection.reflectionOfferedToday,
-      this.config.eveningReflection
+      this.config.eveningReflection,
+      this.config.quietHours.timezoneOffset
     );
 
     if (trigger.shouldTrigger) {

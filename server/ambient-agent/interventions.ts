@@ -42,11 +42,12 @@ export async function sendPushNotification(
     };
 
     // Add rating buttons if intervention ID provided
+    // Note: Button labels must be ASCII-only for HTTP headers
     if (interventionId) {
       headers["Actions"] = [
-        `http, 👍 Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
-        `http, 😐 Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
-        `http, 👎 Intrusive, ${RATING_SERVER}/rate/${interventionId}/bad, method=POST`,
+        `http, Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
+        `http, Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
+        `http, Intrusive, ${RATING_SERVER}/rate/${interventionId}/bad, method=POST`,
       ].join("; ");
     }
 
