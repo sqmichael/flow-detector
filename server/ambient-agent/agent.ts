@@ -37,6 +37,9 @@ import {
   type BatchMessage,
 } from "./types";
 
+// Memory layer for warmth tracking
+import { getUserState, getWarmthDescription } from "../calling/memory";
+
 // Re-export WatchMessage types for the agent
 interface WatchHeartRate {
   type: "hr";
@@ -415,7 +418,11 @@ export class AmbientAgent {
     const flowStatus = this.state.flowProtection.inFlowMode ? "IN FLOW" : `stable ${this.state.flowProtection.stableMinutes}m`;
     const stressStatus = this.state.stressDetection.isElevated ? `ELEVATED ${this.state.stressDetection.elevatedMinutes}m` : "normal";
 
-    const message = `Watch: ${watchStatus} | HR: ${hr} | HRV: ${hrv}ms | SCL: ${scl}uS | Flow: ${flowStatus} | Stress: ${stressStatus}`;
+    // Get warmth level from memory
+    const userState = getUserState();
+    const warmthDesc = getWarmthDescription(userState.warmth_level);
+
+    const message = `Watch: ${watchStatus} | HR: ${hr} | HRV: ${hrv}ms | Flow: ${flowStatus} | Stress: ${stressStatus} | Kai: ${warmthDesc}`;
 
     await sendPushNotification("Heartbeat", message, "low");
     this.log(`Heartbeat sent: ${message}`);
@@ -669,6 +676,11 @@ export class AmbientAgent {
 
     // Interventions today
     lines.push(`║ Interventions: ${this.state.interventionsToday.length}/${this.config.maxInterventionsPerDay}`.padEnd(37) + "║");
+
+    // Warmth level from memory
+    const userState = getUserState();
+    const warmthDesc = getWarmthDescription(userState.warmth_level);
+    lines.push(`║ Kai warmth: ${warmthDesc} (${userState.warmth_level.toFixed(1)})`.padEnd(37) + "║");
 
     // Local time and quiet hours status
     const now = new Date();
