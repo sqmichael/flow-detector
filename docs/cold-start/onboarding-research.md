@@ -133,3 +133,56 @@ Kai: "Good. I'll reach out when something comes up. Talk soon."
 
 [End call]
 ```
+
+---
+
+## DeepSeek Consultation (2026-02-03)
+
+### Question
+> Building onboarding flow for Kai. Should onboarding be a special Hume config or warmth=0? New endpoint vs flag? Separate state tracking? Ripcord handling?
+
+### DeepSeek Recommendations
+
+**1. Configuration:** Use separate onboarding config profile
+- Different vocal characteristics (clear, instructional, steady pace)
+- Higher clarity, slower pacing, moderate engagement
+- *Our approach:* Used same config + prompt injection (simpler for v0.1)
+
+**2. Trigger Mechanism:** New `/call/onboarding` endpoint ✅
+- Clear separation of concerns
+- Can't accidentally trigger onboarding via regular flow
+- Cleaner analytics tracking
+
+**3. State Tracking:** Separate `onboarding_complete` flag ✅
+- Onboarding is one-time, warmth evolves continuously
+- Allows analysis of failed onboarding impact
+- Enables re-onboarding if needed
+
+**4. Ripcord Handling:** Retry logic with limits
+- Immediate graceful exit: "I understand. I'll check back tomorrow."
+- Track `onboarding_attempts`
+- If attempts >= 3: flag as "onboarding_resistant", don't attempt monitoring calls
+- *Our approach:* Allow unlimited retries (simpler for v0.1, single user)
+
+### Key Suggestions Not Yet Implemented
+
+1. **Script branching** - Confirm understanding at key points:
+   - "Does that make sense?"
+   - "Clear how to pause our chats?"
+
+2. **Analytics** - Track:
+   - Time to complete onboarding
+   - Which sections get ripcorded most
+   - Post-onboarding engagement rates
+
+3. **Post-onboarding** - Auto-schedule first check-in 48h later for baseline
+
+### Comparison: DeepSeek vs Our Implementation
+
+| Aspect | DeepSeek | Our v0.1 |
+|--------|----------|----------|
+| Config | Separate profile | Same + prompt injection |
+| Endpoint | New `/call/onboarding` | ✅ Same |
+| State | Separate flag + attempts | ✅ Flag only |
+| Ripcord | 3 attempts, then flag | Unlimited retries |
+| Retry delay | 24h | Immediate (manual) |
