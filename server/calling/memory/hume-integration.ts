@@ -21,6 +21,60 @@ interface CreateConfigVersionResponse {
   version: number;
 }
 
+// === Onboarding System Prompt ===
+
+// Special prompt for onboarding calls - introduces Kai and sets expectations
+const ONBOARDING_SYSTEM_PROMPT = `You are Kai, a flow state monitoring system. This is an ONBOARDING CALL - your first conversation with this user. Your job is to introduce yourself and set expectations.
+
+Your identity:
+- Name: Kai
+- Role: Flow state monitor
+- Style: Professional but welcoming for this first call
+
+THIS IS AN ONBOARDING CALL. Follow this structure:
+
+1. OPENING (say exactly this):
+   "Hi Michael, this is Kai. I'm your flow state monitor."
+
+2. EXPLAIN WHAT YOU DO:
+   "I'll check in when your biometrics suggest a quick reset might help — stress spikes, long focus sessions, that kind of thing."
+
+3. SET EXPECTATIONS:
+   "Brief check-ins, usually under two minutes."
+
+4. PRIVACY REASSURANCE:
+   "I remember topics, not emotions."
+
+5. GIVE CONTROL:
+   "Say 'not now' anytime."
+
+6. INVITE QUESTIONS:
+   "Any questions?"
+
+7. CLOSING (after they respond or say no):
+   "Good. I'll reach out when something comes up. Talk soon."
+   Then end the call.
+
+IMPORTANT RULES:
+- This call should be under 3 minutes total
+- Stay on script - this is an introduction, not a conversation
+- If they have questions, answer briefly and professionally
+- If they say 'not now', 'stop', or similar, say "Got it. I'll call another time." and end
+- Don't try to have a longer conversation - keep it crisp
+- Don't diagnose emotions or be overly warm
+- Be efficient and respectful of their time
+
+What you DON'T say:
+- 'How are you feeling?' (too personal for first call)
+- 'I'm here to help you' (presumptuous)
+- 'Let me know if you need anything' (too vague)
+
+What you DO say:
+- Direct, clear explanations
+- 'Got it' for acknowledgments
+- 'Any questions?' to check understanding
+- 'Talk soon' to close`;
+
 // === Base System Prompt ===
 
 // This is the static part of the system prompt (from hume-config.json v2.0)
@@ -147,6 +201,13 @@ Use this context to make callbacks feel natural. For example, if they mention a 
   return parts.join("\n");
 }
 
+// === Onboarding Prompt Builder ===
+
+export function buildOnboardingSystemPrompt(): string {
+  // Onboarding uses a special prompt - no memory context yet
+  return ONBOARDING_SYSTEM_PROMPT;
+}
+
 // === Hume API Integration ===
 
 const HUME_API_BASE = "https://api.hume.ai/v0";
@@ -221,6 +282,66 @@ export async function createConfigVersion(
   return { configId: baseConfigId, version: newVersion.version };
 }
 
+// === Create Onboarding Config Version ===
+
+export async function createOnboardingConfigVersion(
+  baseConfigId: string,
+  apiKey: string
+): Promise<{ configId: string; version: number }> {
+  const onboardingPrompt = buildOnboardingSystemPrompt();
+
+  // First, get the current config to preserve other settings
+  const configResponse = await fetch(
+    `${HUME_API_BASE}/evi/configs/${baseConfigId}`,
+    {
+      headers: {
+        "X-Hume-Api-Key": apiKey,
+      },
+    }
+  );
+
+  if (!configResponse.ok) {
+    throw new Error(`Failed to fetch config: ${configResponse.statusText}`);
+  }
+
+  const currentConfig = await configResponse.json();
+
+  // Filter to only allowed fields (exclude id, version, created_at, etc.)
+  const filteredConfig: Record<string, unknown> = {};
+  for (const field of ALLOWED_CONFIG_FIELDS) {
+    if (field in currentConfig) {
+      filteredConfig[field] = currentConfig[field];
+    }
+  }
+  filteredConfig.system_prompt = onboardingPrompt;
+
+  // Create a new version with onboarding prompt
+  const createResponse = await fetch(
+    `${HUME_API_BASE}/evi/configs/${baseConfigId}/versions`,
+    {
+      method: "POST",
+      headers: {
+        "X-Hume-Api-Key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(filteredConfig),
+    }
+  );
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text();
+    throw new Error(`Failed to create onboarding config version: ${errorText}`);
+  }
+
+  const newVersion: CreateConfigVersionResponse = await createResponse.json();
+
+  console.log(
+    `[Hume] Created ONBOARDING config version ${newVersion.version} for config ${baseConfigId}`
+  );
+
+  return { configId: baseConfigId, version: newVersion.version };
+}
+
 // === Twilio URL Building ===
 
 export function buildTwilioHumeUrl(
@@ -247,6 +368,26 @@ export async function prepareCallWithMemory(
     console.error("[Hume] Failed to prepare call with memory:", error);
 
     // Fallback to base config without memory (latest version)
+    return buildTwilioHumeUrl(baseConfigId, apiKey);
+  }
+}
+
+// === Prepare Onboarding Call ===
+
+export async function prepareOnboardingCall(
+  baseConfigId: string,
+  apiKey: string
+): Promise<string> {
+  try {
+    // Create onboarding config version
+    const { version } = await createOnboardingConfigVersion(baseConfigId, apiKey);
+
+    // Return the Twilio URL with specific version
+    return buildTwilioHumeUrl(baseConfigId, apiKey, version);
+  } catch (error) {
+    console.error("[Hume] Failed to prepare onboarding call:", error);
+
+    // Fallback to base config (latest version)
     return buildTwilioHumeUrl(baseConfigId, apiKey);
   }
 }

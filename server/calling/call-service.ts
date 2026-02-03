@@ -28,6 +28,7 @@ import {
   touchTheme,
   findThemeByKeyword,
   prepareCallWithMemory,
+  prepareOnboardingCall,
   extractTheme,
   HumeWebhookEvent,
   extractTranscriptText,
@@ -37,6 +38,7 @@ import {
   recordSuccessfulCall,
   recordRipcord,
   recordUserThanks,
+  completeOnboarding,
 } from './memory';
 
 // === Call Outcome Detection ===
@@ -134,6 +136,14 @@ interface CallTrigger {
   context?: string;
 }
 
+// Track which call SIDs are onboarding calls
+// This is needed because Hume webhook doesn't tell us the call type
+const onboardingCallSids = new Set<string>();
+
+// Minimum duration for successful onboarding call (30 seconds)
+// Shorter than regular successful call because onboarding is scripted
+const MIN_ONBOARDING_DURATION_SECONDS = 30;
+
 /**
  * POST /call/trigger
  *
@@ -201,6 +211,84 @@ app.post('/call/trigger', async (req, res) => {
 });
 
 /**
+ * POST /call/onboarding
+ *
+ * Trigger the onboarding call for a new user.
+ * This introduces Kai and sets expectations.
+ *
+ * Returns 400 if user is already onboarded.
+ */
+app.post('/call/onboarding', async (req, res) => {
+  const userState = getUserState();
+
+  // Check if already onboarded (idempotency)
+  if (userState.onboarding_complete) {
+    console.log('[Onboarding] User already onboarded, skipping');
+    return res.status(400).json({
+      success: false,
+      error: 'User already onboarded',
+      warmthLevel: userState.warmth_level
+    });
+  }
+
+  console.log('[Onboarding] Starting onboarding call...');
+
+  try {
+    // Prepare call with onboarding-specific prompt
+    const humeEviUrl = await prepareOnboardingCall(
+      process.env.HUME_CONFIG_ID!,
+      process.env.HUME_API_KEY!
+    );
+
+    // Initiate outbound call via Twilio
+    const call = await twilioClient.calls.create({
+      to: process.env.USER_PHONE_NUMBER!,
+      from: process.env.TWILIO_PHONE_NUMBER!,
+      url: humeEviUrl,
+      method: 'POST',
+      statusCallback: `http://localhost:${PORT}/call/status`,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST'
+    });
+
+    // Track this as an onboarding call
+    onboardingCallSids.add(call.sid);
+
+    console.log(`[Onboarding] Call initiated, SID: ${call.sid}`);
+
+    res.json({
+      success: true,
+      callSid: call.sid,
+      status: call.status,
+      callType: 'onboarding'
+    });
+
+  } catch (error: unknown) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : 'Unknown error occurred while triggering onboarding call';
+
+    console.error('[Onboarding Error]', errorMessage);
+    if (error instanceof Error && error.stack) {
+      console.error('[Onboarding Error Stack]', error.stack);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: errorMessage
+    });
+  }
+});
+
+// Track call SID to session ID mapping for onboarding detection
+// Twilio gives us CallSid, Hume gives us session_id - we need to correlate them
+// For now, we track the most recent call SID and assume Hume webhook comes shortly after
+let pendingOnboardingCallSid: string | null = null;
+
+/**
  * POST /call/status
  *
  * Webhook for call status updates from Twilio
@@ -209,6 +297,18 @@ app.post('/call/status', (req, res) => {
   const { CallSid, CallStatus, Duration } = req.body;
 
   console.log(`[Call Status Update] SID: ${CallSid}, Status: ${CallStatus}`);
+
+  // Track if this is an onboarding call that just started
+  if (CallStatus === 'in-progress' && onboardingCallSids.has(CallSid)) {
+    pendingOnboardingCallSid = CallSid;
+    console.log(`[Call Status] Onboarding call in progress: ${CallSid}`);
+  }
+
+  // Clean up completed onboarding calls
+  if (CallStatus === 'completed' && onboardingCallSids.has(CallSid)) {
+    onboardingCallSids.delete(CallSid);
+    console.log(`[Call Status] Onboarding call completed: ${CallSid}`);
+  }
 
   if (Duration) {
     console.log(`[Call Duration] ${Duration} seconds`);
@@ -222,6 +322,7 @@ app.post('/call/status', (req, res) => {
  *
  * Webhook for Hume EVI events (chat_started, chat_ended).
  * Processes transcripts for theme extraction after substantive calls.
+ * Handles onboarding completion.
  */
 app.post('/call/hume-webhook', async (req, res) => {
   const event = req.body as HumeWebhookEvent;
@@ -233,57 +334,82 @@ app.post('/call/hume-webhook', async (req, res) => {
     const transcriptText = event.transcript ? extractTranscriptText(event) : '';
     console.log(`[Hume Webhook] Call ended, duration: ${duration}s`);
 
-    // === State Machine Update ===
-    const wasRipcord = detectRipcord(transcriptText, duration);
+    // Check if this was an onboarding call
+    const isOnboardingCall = pendingOnboardingCallSid !== null;
+    const userState = getUserState();
 
-    if (wasRipcord) {
-      // User ended call quickly or explicitly dismissed
-      const state = recordRipcord();
-      console.log(`[State] Ripcord recorded. Count: ${state.ripcord_count}, Warmth: ${state.warmth_level.toFixed(1)}`);
-    } else if (duration >= MIN_SUCCESSFUL_CALL_SECONDS) {
-      // Successful call - update warmth
-      let state = recordSuccessfulCall();
-      console.log(`[State] Successful call. Warmth: ${state.warmth_level.toFixed(1)}`);
+    if (isOnboardingCall && !userState.onboarding_complete) {
+      // Handle onboarding call completion
+      pendingOnboardingCallSid = null; // Clear the pending state
 
-      // Bonus warmth for thanks
-      if (detectThanks(transcriptText)) {
-        state = recordUserThanks();
-        console.log(`[State] Thanks bonus applied. Warmth: ${state.warmth_level.toFixed(1)}`);
+      const wasRipcord = detectRipcord(transcriptText, duration);
+
+      if (wasRipcord) {
+        // User ripcorded during onboarding - don't mark complete
+        console.log(`[Onboarding] User ripcorded during onboarding, will retry later`);
+        // Note: We don't call recordRipcord() because warmth is already 0
+        // The user can try onboarding again later
+      } else if (duration >= MIN_ONBOARDING_DURATION_SECONDS) {
+        // Successful onboarding call
+        const state = completeOnboarding();
+        console.log(`[Onboarding] Completed! Warmth level now: ${state.warmth_level.toFixed(1)}`);
+      } else {
+        // Too short but not a ripcord - likely technical issue
+        console.log(`[Onboarding] Call too short (${duration}s), not marking complete`);
       }
-
-      // Extract theme from substantive calls (>3 minutes)
-      if (duration >= MIN_CALL_DURATION_FOR_THEME && transcriptText.length > 100) {
-        console.log('[Hume Webhook] Extracting theme from transcript...');
-
-        try {
-          const extracted = await extractTheme(transcriptText);
-
-          if (extracted) {
-            // Check if this matches an existing theme
-            const existing = findThemeByKeyword(extracted.theme);
-
-            if (existing) {
-              // Touch existing theme to extend its life
-              touchTheme(existing.id);
-              console.log(`[Memory] Touched existing theme: ${existing.theme}`);
-            } else {
-              // Save as new theme
-              const saved = saveTheme(extracted.theme, extracted.context, 'call');
-              console.log(`[Memory] Saved new theme: ${saved.theme}`);
-            }
-          } else {
-            console.log('[Hume Webhook] No theme extracted (confidence too low or no clear topic)');
-          }
-        } catch (error) {
-          console.error('[Hume Webhook] Theme extraction failed:', error);
-        }
-      }
-    } else if (duration < MIN_TECH_FAILURE_SECONDS) {
-      // Very short call - likely technical failure
-      console.log(`[State] Tech failure assumed (${duration}s), no state change`);
     } else {
-      // Short call (30-60s) but no explicit ripcord - ambiguous, no state change
-      console.log(`[State] Ambiguous short call (${duration}s), no state change`);
+      // Regular call - existing logic
+      const wasRipcord = detectRipcord(transcriptText, duration);
+
+      if (wasRipcord) {
+        // User ended call quickly or explicitly dismissed
+        const state = recordRipcord();
+        console.log(`[State] Ripcord recorded. Count: ${state.ripcord_count}, Warmth: ${state.warmth_level.toFixed(1)}`);
+      } else if (duration >= MIN_SUCCESSFUL_CALL_SECONDS) {
+        // Successful call - update warmth
+        let state = recordSuccessfulCall();
+        console.log(`[State] Successful call. Warmth: ${state.warmth_level.toFixed(1)}`);
+
+        // Bonus warmth for thanks
+        if (detectThanks(transcriptText)) {
+          state = recordUserThanks();
+          console.log(`[State] Thanks bonus applied. Warmth: ${state.warmth_level.toFixed(1)}`);
+        }
+
+        // Extract theme from substantive calls (>3 minutes)
+        if (duration >= MIN_CALL_DURATION_FOR_THEME && transcriptText.length > 100) {
+          console.log('[Hume Webhook] Extracting theme from transcript...');
+
+          try {
+            const extracted = await extractTheme(transcriptText);
+
+            if (extracted) {
+              // Check if this matches an existing theme
+              const existing = findThemeByKeyword(extracted.theme);
+
+              if (existing) {
+                // Touch existing theme to extend its life
+                touchTheme(existing.id);
+                console.log(`[Memory] Touched existing theme: ${existing.theme}`);
+              } else {
+                // Save as new theme
+                const saved = saveTheme(extracted.theme, extracted.context, 'call');
+                console.log(`[Memory] Saved new theme: ${saved.theme}`);
+              }
+            } else {
+              console.log('[Hume Webhook] No theme extracted (confidence too low or no clear topic)');
+            }
+          } catch (error) {
+            console.error('[Hume Webhook] Theme extraction failed:', error);
+          }
+        }
+      } else if (duration < MIN_TECH_FAILURE_SECONDS) {
+        // Very short call - likely technical failure
+        console.log(`[State] Tech failure assumed (${duration}s), no state change`);
+      } else {
+        // Short call (30-60s) but no explicit ripcord - ambiguous, no state change
+        console.log(`[State] Ambiguous short call (${duration}s), no state change`);
+      }
     }
   }
 
@@ -346,16 +472,19 @@ process.on('SIGTERM', () => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🎯 Ambient Empathic Agent - Call Service`);
-  console.log(`📞 Listening on http://localhost:${PORT}`);
-  console.log(`🧠 Memory layer active`);
+  console.log(`\n[Call Service] Ambient Empathic Agent - Call Service`);
+  console.log(`[Call Service] Listening on http://localhost:${PORT}`);
+  console.log(`[Call Service] Memory layer active`);
   console.log(`\nEndpoints:`);
   console.log(`  POST /call/trigger      - Trigger outbound call (with memory)`);
+  console.log(`  POST /call/onboarding   - Trigger onboarding call (new users)`);
   console.log(`  POST /call/status       - Call status webhook (Twilio)`);
   console.log(`  POST /call/hume-webhook - Hume events webhook`);
   console.log(`  GET  /memory            - View current memory`);
   console.log(`  GET  /health            - Health check`);
-  console.log(`\nTo trigger a test call:`);
+  console.log(`\nTo trigger onboarding call (new users):`);
+  console.log(`  curl -X POST http://localhost:${PORT}/call/onboarding`);
+  console.log(`\nTo trigger a regular call:`);
   console.log(`  curl -X POST http://localhost:${PORT}/call/trigger \\`);
   console.log(`       -H "Content-Type: application/json" \\`);
   console.log(`       -d '{"reason": "stress_check_in"}'`);
