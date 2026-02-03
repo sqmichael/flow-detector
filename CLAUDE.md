@@ -99,10 +99,12 @@ Phase: Ambient Agent Felt-Experience Prototype - **IN PROGRESS**
   - Interventions fire ONLY on physiological patterns (flow, stress, recovery)
   - Use `fixed` mode as control condition for comparison
 
-### Backlog (Call Service Improvements)
-- **Memory Layer** — Store conversation summaries, inject recent context into prompts before each call
-- **Cold Start Solution** — Agent backstory/persona (Character AI style) to provide conversation hooks
-- **Onboarding Flow** — First call as explicit introduction to seed initial context
+### Recently Shipped (PR #22)
+- ✅ **Memory Layer** — SQLite persistence with theme extraction and decay
+- ✅ **Cold Start Solution** — Kai identity with warmth evolution (0→3 scale)
+- ✅ **Onboarding Flow** — `/call/onboarding` endpoint for first-time introduction
+
+### Backlog
 - **Dynamic Prompt Injection** — Include sensor context (mood, time of day, last conversation) in prompts
 
 ### Watch App Setup Notes
@@ -250,8 +252,17 @@ watch-app/                             ✅ Galaxy Watch Kotlin app (Wear OS)
 server/
 ├── watch-relay.ts              ✅ Standalone WebSocket relay (port 8765)
 ├── calling/                    ✅ Hume EVI + Twilio phone call service
-│   ├── call-service.ts         ✅ Express server (port 8766) for outbound calls
-│   ├── hume-config.json        ✅ EVI persona configuration
+│   ├── call-service.ts         ✅ Express server (port 8766) with /call/trigger and /call/onboarding
+│   ├── hume-config.json        ✅ EVI persona configuration (Kai identity)
+│   ├── memory/                 ✅ Memory Layer v0.1
+│   │   ├── types.ts            ✅ Theme, Preference, UserState types
+│   │   ├── db.ts               ✅ SQLite database (better-sqlite3)
+│   │   ├── service.ts          ✅ CRUD + warmth evolution + interest tracking
+│   │   ├── commands.ts         ✅ Voice command detection (remember/forget/query)
+│   │   ├── theme-extractor.ts  ✅ DeepSeek-based theme extraction from transcripts
+│   │   ├── hume-integration.ts ✅ Dynamic prompt injection + config versioning
+│   │   ├── service.test.ts     ✅ 35 tests covering service layer
+│   │   └── hume-integration.test.ts ✅ 15 tests for prompt building
 │   ├── SETUP.md                ✅ Setup guide for Twilio + Hume credentials
 │   └── .env.example            ✅ Environment variables template
 └── ambient-agent/              ✅ Sensor-triggered intervention prototype
