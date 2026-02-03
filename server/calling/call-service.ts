@@ -140,6 +140,9 @@ interface CallTrigger {
 // This is needed because Hume webhook doesn't tell us the call type
 const onboardingCallSids = new Set<string>();
 
+// Lock to prevent concurrent onboarding triggers
+let onboardingInProgress = false;
+
 // Minimum duration for successful onboarding call (30 seconds)
 // Shorter than regular successful call because onboarding is scripted
 const MIN_ONBOARDING_DURATION_SECONDS = 30;
@@ -231,6 +234,16 @@ app.post('/call/onboarding', async (req, res) => {
     });
   }
 
+  // Check if onboarding already in progress (prevent concurrent triggers)
+  if (onboardingInProgress) {
+    console.log('[Onboarding] Already in progress, rejecting');
+    return res.status(409).json({
+      success: false,
+      error: 'Onboarding call already in progress'
+    });
+  }
+
+  onboardingInProgress = true;
   console.log('[Onboarding] Starting onboarding call...');
 
   try {
@@ -264,6 +277,8 @@ app.post('/call/onboarding', async (req, res) => {
     });
 
   } catch (error: unknown) {
+    onboardingInProgress = false; // Release the lock on failure
+
     const errorMessage =
       error instanceof Error
         ? error.message
@@ -341,6 +356,7 @@ app.post('/call/hume-webhook', async (req, res) => {
     if (isOnboardingCall && !userState.onboarding_complete) {
       // Handle onboarding call completion
       pendingOnboardingCallSid = null; // Clear the pending state
+      onboardingInProgress = false; // Release the lock
 
       const wasRipcord = detectRipcord(transcriptText, duration);
 
