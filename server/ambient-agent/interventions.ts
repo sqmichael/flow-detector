@@ -238,6 +238,68 @@ export function getReflectionPrompts(count: number = 2): string[] {
 
 // ── Intervention Orchestration ──────────────────────────────────────
 
+// ── Contextual Message Builders ─────────────────────────────────────
+
+/**
+ * Build sensor-contextual message for flow protection
+ */
+function buildFlowMessage(context: Intervention["trigger"]["context"]): string {
+  const parts: string[] = [];
+
+  if (context.flowDurationMinutes) {
+    parts.push(`${context.flowDurationMinutes}min focused`);
+  }
+  if (context.hr) {
+    parts.push(`HR ${context.hr}`);
+  }
+
+  if (parts.length > 0) {
+    return `Deep work detected (${parts.join(", ")}). Silencing interruptions.`;
+  }
+  return "Deep work detected. Silencing interruptions.";
+}
+
+/**
+ * Build sensor-contextual message for stress check-in
+ */
+function buildCheckinMessage(context: Intervention["trigger"]["context"]): string {
+  const parts: string[] = [];
+
+  if (context.hr) {
+    parts.push(`HR ${context.hr}`);
+  }
+  if (context.hrv) {
+    parts.push(`HRV ${Math.round(context.hrv)}ms`);
+  }
+  if (context.scl) {
+    parts.push(`EDA ${context.scl.toFixed(1)}µS`);
+  }
+
+  if (parts.length > 0) {
+    return `Noticing some tension (${parts.join(", ")}). Walk and talk?`;
+  }
+  return CHECKIN_SCRIPT;
+}
+
+/**
+ * Build sensor-contextual message for evening reflection
+ */
+function buildReflectionMessage(context: Intervention["trigger"]["context"]): string {
+  const parts: string[] = [];
+
+  if (context.hrv) {
+    parts.push(`HRV ${Math.round(context.hrv)}ms`);
+  }
+  if (context.hr) {
+    parts.push(`HR ${context.hr}`);
+  }
+
+  if (parts.length > 0) {
+    return `Body settling down (${parts.join(", ")}). Good time to reflect.`;
+  }
+  return "Evening wind-down. Good time to reflect.";
+}
+
 /**
  * Execute an intervention based on its type
  */
@@ -259,7 +321,7 @@ export async function executeIntervention(
       await enableFocusMode();
       await showNotification(
         "Flow Mode",
-        "Focus Mode enabled. Deep work protected.",
+        buildFlowMessage(trigger.context),
         false, // Silent notification
         id
       );
@@ -272,7 +334,7 @@ export async function executeIntervention(
       // Show notification with rating buttons
       await showNotification(
         "Check-in",
-        CHECKIN_SCRIPT,
+        buildCheckinMessage(trigger.context),
         true,
         id
       );
@@ -287,21 +349,17 @@ export async function executeIntervention(
 
     case "evening_reflection":
       const prompts = getReflectionPrompts(2);
+      const reflectionIntro = buildReflectionMessage(trigger.context);
 
-      await showNotification("Evening Reflection", prompts[0], true, id);
+      await showNotification("Evening Reflection", reflectionIntro, true, id);
 
-      // Show second prompt after a moment (no rating buttons on follow-ups)
+      // Show reflection prompts after a moment
       setTimeout(async () => {
-        await showNotification("Reflection", prompts[1], false);
+        await showNotification("Reflect", prompts[0], false);
       }, 10000);
 
-      // Suggest walking
       setTimeout(async () => {
-        await showNotification(
-          "Optional",
-          "Consider a short walk while reflecting.",
-          false
-        );
+        await showNotification("Reflect", prompts[1], false);
       }, 20000);
       break;
   }
