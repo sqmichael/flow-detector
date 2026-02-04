@@ -69,7 +69,7 @@ dependencies {
     // Samsung Health Sensor SDK — not on Maven Central.
     // Download from: https://developer.samsung.com/health/sensor
     // Place the AAR in app/libs/
-    implementation(files("libs/samsung-health-sensor-api.aar"))
+    implementation(files("libs/samsung-health-sensor-api-1.4.1.aar"))
 
     // Wear OS Compose - Use consistent versions
     implementation("androidx.wear.compose:compose-material:1.2.1")
