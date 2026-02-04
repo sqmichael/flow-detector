@@ -129,9 +129,10 @@ function calculateBlinkRateScore(
 
   const z = zScore(blinkRate, baseline.blinkRateMean, baseline.blinkRateStdDev);
 
-  // Flow target: -1.5 std below baseline (significantly fewer blinks)
-  // Use Gaussian centered at -1.5 with width 1.0
-  const score = gaussianScore(z, -1.5, 1.0);
+  // Flow target: -1.0 std below baseline (moderately fewer blinks)
+  // Softened from -1.5 to avoid conflating eye strain with flow
+  // Use Gaussian centered at -1.0 with width 1.0
+  const score = gaussianScore(z, -1.0, 1.0);
 
   log(`Blink rate: ${blinkRate.toFixed(1)}/min, z=${z.toFixed(2)}, score=${score.toFixed(3)}`);
 
