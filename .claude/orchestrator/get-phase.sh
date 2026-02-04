@@ -3,7 +3,10 @@
 # Orchestrator Phase Guidance Script
 # Reads state.json and outputs guidance for the current phase
 
-cd "$CLAUDE_PROJECT_DIR" || exit 1
+# Use script's location to find project root (more robust than env var)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
+cd "$PROJECT_DIR" || exit 1
 
 STATE_FILE=".claude/orchestrator/state.json"
 PHASES_DIR=".claude/orchestrator/phases"

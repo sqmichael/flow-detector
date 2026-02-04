@@ -3,7 +3,10 @@
 # Flow Detector - Pre-Stop Validation Script
 # This script runs before Claude can finish, ensuring work is complete.
 
-cd "$CLAUDE_PROJECT_DIR" || exit 1
+# Use script's location to find project root (more robust than env var)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR" || exit 1
 
 errors=()
 
