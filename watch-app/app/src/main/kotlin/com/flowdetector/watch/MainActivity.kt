@@ -9,6 +9,7 @@ import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -60,6 +61,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Request battery optimization exemption to prevent Freecessor from freezing the app
+        requestBatteryOptimizationExemption()
+
         Intent(this, SensorService::class.java).also { intent ->
             bindService(intent, connection, Context.BIND_AUTO_CREATE)
         }
@@ -89,6 +93,30 @@ class MainActivity : ComponentActivity() {
         if (isBound) {
             unbindService(connection)
             isBound = false
+        }
+    }
+
+    /**
+     * Request exemption from battery optimization (Doze mode).
+     * This prevents Samsung's Freecessor from freezing the app in background.
+     * The system will show a dialog asking user to allow the app to run unrestricted.
+     */
+    private fun requestBatteryOptimizationExemption() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val packageName = packageName
+
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            Log.i(TAG, "Requesting battery optimization exemption")
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to request battery optimization exemption: ${e.message}")
+            }
+        } else {
+            Log.i(TAG, "Already exempt from battery optimization")
         }
     }
 }
