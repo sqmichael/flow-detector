@@ -22,8 +22,17 @@ class WebSocketManager(private val callback: ConnectionCallback) {
         fun onError(message: String)
     }
 
+    /**
+     * Additional callback for sync triggers.
+     * Set by SensorRepository to trigger sync when connection is established.
+     */
+    var onConnectedForSync: (() -> Unit)? = null
+
     @Volatile
     private var webSocket: WebSocket? = null
+
+    @Volatile
+    private var connected = false
 
     @Volatile
     private var isIntentionalClose = false
@@ -76,6 +85,12 @@ class WebSocketManager(private val callback: ConnectionCallback) {
         return webSocket?.send(message) ?: false
     }
 
+    /**
+     * Check if WebSocket is currently connected.
+     * Used by SensorRepository to determine if sync should be attempted.
+     */
+    fun isConnected(): Boolean = connected
+
     fun destroy() {
         Log.i(TAG, "Destroying WebSocketManager")
         isIntentionalClose = true
@@ -89,6 +104,7 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
         override fun onOpen(ws: WebSocket, response: Response) {
             Log.i(TAG, "Connected to relay server")
+            connected = true
             reconnectDelay = INITIAL_DELAY_MS
 
             val handshake = HandshakeMessage(
@@ -100,10 +116,14 @@ class WebSocketManager(private val callback: ConnectionCallback) {
             Log.d(TAG, "Sent handshake: ${handshake.deviceName}, sensors: ${sensors.joinToString()}")
 
             callback.onConnected()
+
+            // Trigger sync of pending batches
+            onConnectedForSync?.invoke()
         }
 
         override fun onClosed(ws: WebSocket, code: Int, reason: String) {
             Log.i(TAG, "Connection closed: code=$code, reason=$reason")
+            connected = false
             webSocket = null
             callback.onDisconnected(code, reason)
 
@@ -118,6 +138,7 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
             Log.e(TAG, "Connection failure: ${t.message}")
+            connected = false
             webSocket = null
             callback.onError("Connection failed — retrying...")
             scheduleReconnect(url)
