@@ -289,11 +289,6 @@ export class AmbientAgent {
     try {
       const msg = JSON.parse(raw) as IncomingMessage;
 
-      // Debug: log all incoming message types
-      if (msg.type !== "watch_status") {
-        this.log(`[DEBUG] Received: ${msg.type}`);
-      }
-
       switch (msg.type) {
         case "handshake":
           this.handleHandshake(msg);
