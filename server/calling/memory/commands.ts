@@ -16,6 +16,7 @@ import {
   savePreference,
   forgetByKeyword,
   formatMemorySummaryForVoice,
+  recordRipcord,
 } from "./service";
 
 // === Command Detection Patterns ===
@@ -148,6 +149,9 @@ function executeQuery(): CommandResult {
 }
 
 function executeRipcord(): CommandResult {
+  // Update user state to track ripcord
+  recordRipcord();
+
   return {
     success: true,
     response: "", // No response, just end

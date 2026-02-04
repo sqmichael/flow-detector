@@ -32,7 +32,55 @@ import {
   HumeWebhookEvent,
   extractTranscriptText,
   MIN_CALL_DURATION_FOR_THEME,
+  // User state management
+  getUserState,
+  recordSuccessfulCall,
+  recordRipcord,
+  recordUserThanks,
 } from './memory';
+
+// === Call Outcome Detection ===
+
+const RIPCORD_PHRASES = ['dismiss', 'not now', 'stop', 'bad timing', 'gotta go', 'let me go'];
+const THANKS_PHRASES = ['thank', 'thanks', 'appreciate'];
+const MIN_SUCCESSFUL_CALL_SECONDS = 60; // 1 minute minimum for "successful" call
+const MAX_RIPCORD_DURATION_SECONDS = 30; // Very short calls are likely ripcords
+const MIN_TECH_FAILURE_SECONDS = 10; // Below this, assume technical failure not user rejection
+
+// Word boundary matching to avoid false positives (e.g., "stop" in "unstoppable")
+function matchesPhrase(text: string, phrases: string[]): boolean {
+  const lower = text.toLowerCase();
+  return phrases.some(phrase => {
+    const regex = new RegExp(`\\b${phrase}\\b`, 'i');
+    return regex.test(lower);
+  });
+}
+
+function detectRipcord(transcriptText: string, duration: number): boolean {
+  // Very short calls (<10s) are likely technical failures, not user rejection
+  if (duration < MIN_TECH_FAILURE_SECONDS) {
+    return false;
+  }
+
+  // Short calls (10-30s) are implicit ripcords (user hung up quickly)
+  if (duration < MAX_RIPCORD_DURATION_SECONDS) {
+    return true;
+  }
+
+  // For medium-length calls (30-60s), check transcript for explicit ripcord
+  // If call lasted 60+ seconds, the agent didn't catch the ripcord intent,
+  // so the phrase was likely used in a different context
+  if (duration < MIN_SUCCESSFUL_CALL_SECONDS) {
+    return matchesPhrase(transcriptText, RIPCORD_PHRASES);
+  }
+
+  // Long calls (>=60s) are not ripcords
+  return false;
+}
+
+function detectThanks(transcriptText: string): boolean {
+  return matchesPhrase(transcriptText, THANKS_PHRASES);
+}
 
 const app = express();
 app.use(cors());
@@ -72,7 +120,9 @@ if (expiredCount > 0) {
   console.log(`[Memory] Cleaned up ${expiredCount} expired themes`);
 }
 const summary = getMemorySummary();
+const initialUserState = getUserState();
 console.log(`[Memory] Loaded ${summary.themes.length} themes, ${summary.preferences.length} preferences`);
+console.log(`[State] Warmth: ${initialUserState.warmth_level.toFixed(1)}, Onboarded: ${initialUserState.onboarding_complete}`);
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -180,13 +230,29 @@ app.post('/call/hume-webhook', async (req, res) => {
 
   if (event.type === 'chat_ended') {
     const duration = event.duration_seconds || 0;
+    const transcriptText = event.transcript ? extractTranscriptText(event) : '';
     console.log(`[Hume Webhook] Call ended, duration: ${duration}s`);
 
-    // Only extract themes from substantive calls (>3 minutes)
-    if (duration >= MIN_CALL_DURATION_FOR_THEME && event.transcript) {
-      const transcriptText = extractTranscriptText(event);
+    // === State Machine Update ===
+    const wasRipcord = detectRipcord(transcriptText, duration);
 
-      if (transcriptText.length > 100) {
+    if (wasRipcord) {
+      // User ended call quickly or explicitly dismissed
+      const state = recordRipcord();
+      console.log(`[State] Ripcord recorded. Count: ${state.ripcord_count}, Warmth: ${state.warmth_level.toFixed(1)}`);
+    } else if (duration >= MIN_SUCCESSFUL_CALL_SECONDS) {
+      // Successful call - update warmth
+      let state = recordSuccessfulCall();
+      console.log(`[State] Successful call. Warmth: ${state.warmth_level.toFixed(1)}`);
+
+      // Bonus warmth for thanks
+      if (detectThanks(transcriptText)) {
+        state = recordUserThanks();
+        console.log(`[State] Thanks bonus applied. Warmth: ${state.warmth_level.toFixed(1)}`);
+      }
+
+      // Extract theme from substantive calls (>3 minutes)
+      if (duration >= MIN_CALL_DURATION_FOR_THEME && transcriptText.length > 100) {
         console.log('[Hume Webhook] Extracting theme from transcript...');
 
         try {
@@ -212,6 +278,12 @@ app.post('/call/hume-webhook', async (req, res) => {
           console.error('[Hume Webhook] Theme extraction failed:', error);
         }
       }
+    } else if (duration < MIN_TECH_FAILURE_SECONDS) {
+      // Very short call - likely technical failure
+      console.log(`[State] Tech failure assumed (${duration}s), no state change`);
+    } else {
+      // Short call (30-60s) but no explicit ripcord - ambiguous, no state change
+      console.log(`[State] Ambiguous short call (${duration}s), no state change`);
     }
   }
 
@@ -225,7 +297,17 @@ app.post('/call/hume-webhook', async (req, res) => {
  */
 app.get('/memory', (req, res) => {
   const summary = getMemorySummary();
-  res.json(summary);
+  const userState = getUserState();
+  res.json({
+    ...summary,
+    userState: {
+      warmthLevel: userState.warmth_level,
+      onboardingComplete: userState.onboarding_complete,
+      ripcordCount: userState.ripcord_count,
+      callsSinceRipcord: userState.calls_since_ripcord,
+      lastEngagement: new Date(userState.last_engagement).toISOString(),
+    }
+  });
 });
 
 /**
@@ -235,6 +317,7 @@ app.get('/memory', (req, res) => {
  */
 app.get('/health', (req, res) => {
   const memorySummary = getMemorySummary();
+  const userState = getUserState();
   res.json({
     status: 'ok',
     service: 'ambient-empathic-agent-calling',
@@ -243,7 +326,9 @@ app.get('/health', (req, res) => {
     memory: {
       themes: memorySummary.themes.length,
       preferences: memorySummary.preferences.length
-    }
+    },
+    warmth: userState.warmth_level,
+    onboarded: userState.onboarding_complete
   });
 });
 
