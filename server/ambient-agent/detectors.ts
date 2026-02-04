@@ -247,6 +247,115 @@ export function shouldTriggerEveningReflection(
   return { shouldTrigger: false, reason: "Waiting for recovery state" };
 }
 
+// ── Low Energy Detection (Silent Logging Only) ──────────────────────
+
+export interface LowEnergyConfig {
+  hrThreshold: number; // HR below this suggests low energy (default: 60)
+  hrvLowThreshold: number; // HRV below this (not crashed, just low)
+  hrvHighThreshold: number; // HRV above this = probably fine
+  edaFlatThreshold: number; // EDA below this = flat/no arousal
+  activeHoursStart: number; // Start of "should be awake" hours (default: 8)
+  activeHoursEnd: number; // End of active hours (default: 18)
+}
+
+export const DEFAULT_LOW_ENERGY_CONFIG: LowEnergyConfig = {
+  hrThreshold: 60,
+  hrvLowThreshold: 50,
+  hrvHighThreshold: 100,
+  edaFlatThreshold: 0.5,
+  activeHoursStart: 8,
+  activeHoursEnd: 18,
+};
+
+export interface LowEnergyState {
+  isLowEnergy: boolean;
+  confidence: "low" | "medium" | "high";
+  reasons: string[];
+  metrics: {
+    hr: number | null;
+    hrv: number | null;
+    eda: number | null;
+    localHour: number;
+  };
+}
+
+/**
+ * Detect low energy state (for logging only, not intervention)
+ *
+ * Low energy pattern:
+ * - HR at resting levels during active hours
+ * - HRV moderate-low (not crashed like stress, just flat)
+ * - EDA flat (no arousal)
+ */
+export function detectLowEnergy(
+  currentHR: number | null,
+  currentHRV: number | null,
+  currentEDA: number | null,
+  timezoneOffset: number,
+  config: LowEnergyConfig = DEFAULT_LOW_ENERGY_CONFIG
+): LowEnergyState {
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const localHour = ((utcHour + timezoneOffset) % 24 + 24) % 24;
+
+  const metrics = {
+    hr: currentHR,
+    hrv: currentHRV,
+    eda: currentEDA,
+    localHour,
+  };
+
+  // Outside active hours - don't flag as "low energy"
+  if (localHour < config.activeHoursStart || localHour >= config.activeHoursEnd) {
+    return {
+      isLowEnergy: false,
+      confidence: "low",
+      reasons: ["Outside active hours"],
+      metrics,
+    };
+  }
+
+  const reasons: string[] = [];
+  let score = 0;
+
+  // Check HR
+  if (currentHR !== null && currentHR < config.hrThreshold) {
+    reasons.push(`HR ${currentHR} < ${config.hrThreshold} (resting level)`);
+    score += 1;
+  }
+
+  // Check HRV - looking for moderate-low, not crashed
+  if (currentHRV !== null) {
+    if (currentHRV < config.hrvLowThreshold) {
+      reasons.push(`HRV ${Math.round(currentHRV)}ms < ${config.hrvLowThreshold}ms (low)`);
+      score += 1;
+    } else if (currentHRV < config.hrvHighThreshold) {
+      reasons.push(`HRV ${Math.round(currentHRV)}ms moderate`);
+      score += 0.5;
+    }
+  }
+
+  // Check EDA
+  if (currentEDA !== null && currentEDA < config.edaFlatThreshold) {
+    reasons.push(`EDA ${currentEDA.toFixed(1)}µS flat (no arousal)`);
+    score += 1;
+  }
+
+  // Determine confidence
+  let confidence: "low" | "medium" | "high" = "low";
+  if (score >= 2.5) confidence = "high";
+  else if (score >= 1.5) confidence = "medium";
+
+  const isLowEnergy = score >= 1.5;
+
+  return {
+    isLowEnergy,
+    confidence,
+    reasons,
+    metrics,
+  };
+}
+
 // ── Baseline Estimation ─────────────────────────────────────────────
 
 /**
