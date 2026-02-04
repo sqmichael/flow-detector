@@ -17,6 +17,7 @@ import {
   detectStressPattern,
   shouldTriggerEveningReflection,
   estimateBaseline,
+  detectLowEnergy,
   type SensorSample,
   type HRVSample,
 } from "./detectors";
@@ -26,7 +27,7 @@ import {
   disableFocusMode,
   sendPushNotification,
 } from "./interventions";
-import { InterventionLogger } from "./logger";
+import { InterventionLogger, EnergyLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import {
   DEFAULT_CONFIG,
@@ -112,6 +113,7 @@ export class AmbientAgent {
   private ws: WebSocket | null = null;
   private hrvCalculator: HRVCalculator;
   private logger: InterventionLogger;
+  private energyLogger: EnergyLogger;
 
   // Sensor history for detection
   private hrHistory: SensorSample[] = [];
@@ -131,6 +133,10 @@ export class AmbientAgent {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.hrvCalculator = new HRVCalculator();
     this.logger = new InterventionLogger(this.config.logPath);
+    this.energyLogger = new EnergyLogger(
+      this.config.logPath.replace(".jsonl", "-energy.jsonl"),
+      5 // Log at most every 5 minutes
+    );
 
     this.state = this.createInitialState();
 
@@ -454,6 +460,21 @@ export class AmbientAgent {
     await this.processFlowProtection();
     await this.processStressDetection();
     await this.processEveningReflection();
+
+    // Silent energy state logging (no intervention)
+    await this.logEnergyState();
+  }
+
+  private async logEnergyState(): Promise<void> {
+    const energyState = detectLowEnergy(
+      this.state.currentHR,
+      this.state.currentHRV,
+      this.state.currentSCL,
+      this.config.quietHours.timezoneOffset
+    );
+
+    // Logger handles throttling and filtering
+    await this.energyLogger.logState(energyState);
   }
 
   // ── Behavior A: Flow Protection ─────────────────────────────────

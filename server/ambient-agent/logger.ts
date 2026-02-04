@@ -8,6 +8,7 @@
 import { appendFile, readFile, access, writeFile } from "fs/promises";
 import { constants } from "fs";
 import type { Intervention } from "./types";
+import type { LowEnergyState } from "./detectors";
 
 // ── Log Entry Types ─────────────────────────────────────────────────
 
@@ -284,4 +285,141 @@ export function formatSummary(summary: DailySummary): string {
   lines.push(`Want again: ${summary.wantAgainTomorrow} yes`);
 
   return lines.join("\n");
+}
+
+// ── Energy State Logger ──────────────────────────────────────────────
+
+export interface EnergyLogEntry {
+  timestamp: number;
+  date: string;
+  time: string; // HH:MM local time
+  state: LowEnergyState;
+}
+
+/**
+ * Logger for energy state observations
+ * Logs to a separate file for pattern analysis
+ */
+export class EnergyLogger {
+  private logPath: string;
+  private lastLogTime: number = 0;
+  private minIntervalMs: number; // Don't log more often than this
+
+  constructor(logPath: string, minIntervalMinutes: number = 5) {
+    this.logPath = logPath;
+    this.minIntervalMs = minIntervalMinutes * 60 * 1000;
+  }
+
+  private async ensureFile(): Promise<void> {
+    try {
+      await access(this.logPath, constants.F_OK);
+    } catch {
+      await writeFile(this.logPath, "");
+    }
+  }
+
+  /**
+   * Log energy state (throttled to avoid spam)
+   */
+  async logState(state: LowEnergyState): Promise<boolean> {
+    const now = Date.now();
+
+    // Throttle logging
+    if (now - this.lastLogTime < this.minIntervalMs) {
+      return false;
+    }
+
+    // Only log low energy states (medium or high confidence)
+    if (!state.isLowEnergy || state.confidence === "low") {
+      return false;
+    }
+
+    await this.ensureFile();
+
+    const date = new Date();
+    const entry: EnergyLogEntry = {
+      timestamp: now,
+      date: date.toISOString().split("T")[0],
+      time: `${String(state.metrics.localHour).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`,
+      state,
+    };
+
+    const line = JSON.stringify(entry) + "\n";
+    await appendFile(this.logPath, line);
+
+    this.lastLogTime = now;
+    console.log(`[Energy] Low energy logged: ${state.reasons.join(", ")}`);
+
+    return true;
+  }
+
+  /**
+   * Get energy entries for a date range
+   */
+  async getEntries(startDate?: string, endDate?: string): Promise<EnergyLogEntry[]> {
+    try {
+      const content = await readFile(this.logPath, "utf-8");
+      const lines = content.trim().split("\n").filter(Boolean);
+
+      let entries = lines.map((line) => JSON.parse(line) as EnergyLogEntry);
+
+      if (startDate) {
+        entries = entries.filter((e) => e.date >= startDate);
+      }
+      if (endDate) {
+        entries = entries.filter((e) => e.date <= endDate);
+      }
+
+      return entries;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Get daily summary of low energy periods
+   */
+  async getDailySummary(date: string): Promise<{
+    date: string;
+    lowEnergyPeriods: number;
+    peakHours: number[];
+    avgHR: number | null;
+    avgHRV: number | null;
+  } | null> {
+    const entries = await this.getEntries(date, date);
+
+    if (entries.length === 0) {
+      return null;
+    }
+
+    const hours = entries.map((e) => e.state.metrics.localHour);
+    const hrValues = entries
+      .map((e) => e.state.metrics.hr)
+      .filter((v): v is number => v !== null);
+    const hrvValues = entries
+      .map((e) => e.state.metrics.hrv)
+      .filter((v): v is number => v !== null);
+
+    // Find most common hours
+    const hourCounts = new Map<number, number>();
+    for (const h of hours) {
+      hourCounts.set(h, (hourCounts.get(h) || 0) + 1);
+    }
+    const peakHours = [...hourCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([hour]) => hour);
+
+    return {
+      date,
+      lowEnergyPeriods: entries.length,
+      peakHours,
+      avgHR: hrValues.length > 0
+        ? hrValues.reduce((a, b) => a + b, 0) / hrValues.length
+        : null,
+      avgHRV: hrvValues.length > 0
+        ? hrvValues.reduce((a, b) => a + b, 0) / hrvValues.length
+        : null,
+    };
+  }
 }
