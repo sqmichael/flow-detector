@@ -1,9 +1,10 @@
 {
-  "iteration": null,
-  "taskType": null,
-  "currentPhase": null,
-  "phasesRequired": [],
-  "phasesCompleted": [],
-  "startedAt": null,
-  "updatedAt": null
+  "iteration": "mobile-first-architecture",
+  "taskType": "feature",
+  "currentPhase": "plan",
+  "phasesRequired": ["plan", "build", "test", "ship"],
+  "phasesCompleted": ["plan"],
+  "startedAt": "2026-02-01",
+  "updatedAt": "2026-02-01",
+  "notes": "30-second batching architecture. Ready to build. See iterations/mobile-first-architecture.md"
 }
