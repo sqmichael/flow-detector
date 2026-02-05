@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.flowdetector.watch.data.AppDatabase
+import com.flowdetector.watch.data.SensorRepository
 import kotlin.math.pow
 import kotlin.math.sqrt
 
@@ -119,7 +121,8 @@ class SensorService : LifecycleService() {
     }
 
     /**
-     * Flush the current batch to WebSocket.
+     * Flush the current batch to local storage (and sync if connected).
+     * Data is ALWAYS saved locally first to prevent data loss.
      */
     private fun flushBatch() {
         val (hrSamples, ibiSamples, edaSamples, ppgSamples, accelSamples) = synchronized(bufferLock) {
@@ -199,20 +202,25 @@ class SensorService : LifecycleService() {
             )
         } else null
 
-        val batch = BatchMessage(
-            hr = hrAggregate,
-            hrv = hrvAggregate,
-            eda = edaAggregate,
-            ppg = ppgAggregate,
-            accel = accelAggregate,
-            timestamp = System.currentTimeMillis()
-        )
-
+        val timestamp = System.currentTimeMillis()
         val ppgInfo = ppgAggregate?.let { " PPG=${it.samples}samples" } ?: ""
         val accelInfo = accelAggregate?.let { " Stillness=${(it.stillness * 100).toInt()}%" } ?: ""
-        Log.i(TAG, "Sending batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
+        Log.i(TAG, "Saving batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
                 "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}$ppgInfo$accelInfo")
-        webSocketManager.send(batch.toJson())
+
+        // Save to local database (local-first), then sync if connected
+        lifecycleScope.launch {
+            val batch = sensorRepository.createBatch(
+                hr = hrAggregate,
+                hrv = hrvAggregate,
+                eda = edaAggregate,
+                ppg = ppgAggregate,
+                accel = accelAggregate,
+                timestamp = timestamp,
+                windowMs = BATCH_WINDOW_MS
+            )
+            sensorRepository.saveBatch(batch)
+        }
     }
 
     /**
@@ -269,8 +277,12 @@ class SensorService : LifecycleService() {
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
+    private val _pendingBatches = MutableStateFlow(0)
+    val pendingBatches: StateFlow<Int> = _pendingBatches.asStateFlow()
+
     // --- Internal state ---
 
+    private lateinit var sensorRepository: SensorRepository
     private var healthTrackingService: HealthTrackingService? = null
     private var heartRateTracker: HealthTracker? = null
     private var edaTracker: HealthTracker? = null
@@ -286,6 +298,26 @@ class SensorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         webSocketManager = WebSocketManager(webSocketCallback)
+
+        // Initialize Room database and repository
+        val database = AppDatabase.getInstance(applicationContext)
+        sensorRepository = SensorRepository(database.sensorBatchDao(), webSocketManager)
+
+        // Wire up sync trigger on WebSocket connect
+        webSocketManager.onConnectedForSync = {
+            lifecycleScope.launch {
+                sensorRepository.syncUnsynced()
+                _pendingBatches.value = sensorRepository.getPendingCount()
+            }
+        }
+
+        // Observe pending count from repository
+        lifecycleScope.launch {
+            sensorRepository.pendingCount.collect { count ->
+                _pendingBatches.value = count
+            }
+        }
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         @Suppress("WakelockTimeout") // Intentional: streaming runs until user taps Disconnect
         wakeLock = powerManager.newWakeLock(
@@ -316,6 +348,7 @@ class SensorService : LifecycleService() {
 
     override fun onDestroy() {
         stopStreaming()
+        sensorRepository.destroy()
         webSocketManager.destroy()
         super.onDestroy()
     }
@@ -339,8 +372,9 @@ class SensorService : LifecycleService() {
     fun stopStreaming() {
         Log.i(TAG, "Stopping streaming")
 
-        // Stop batch timer and flush remaining data
+        // Stop batch timer, flush remaining data, and stop cleanup scheduler
         stopBatchTimer()
+        sensorRepository.stopCleanupScheduler()
 
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
@@ -488,9 +522,10 @@ class SensorService : LifecycleService() {
         _isStreaming.value = activeSensors.isNotEmpty()
         Log.i(TAG, "Active sensors: ${activeSensors.joinToString()}")
 
-        // Start 30-second batch timer
+        // Start 30-second batch timer and cleanup scheduler
         if (activeSensors.isNotEmpty()) {
             startBatchTimer()
+            sensorRepository.startCleanupScheduler()
             Log.i(TAG, "Batch timer started (${BATCH_WINDOW_MS / 1000}s windows)")
         }
     }

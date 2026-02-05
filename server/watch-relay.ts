@@ -42,6 +42,84 @@ log("Database initialized");
 const browserClients = new Set<WebSocket>();
 let watchClient: WebSocket | null = null;
 let watchDeviceName: string | null = null;
+let watchPingInterval: NodeJS.Timeout | null = null;
+
+const PING_INTERVAL_MS = 15000; // 15 seconds
+
+// Extended WebSocket type with isAlive flag
+interface WatchWebSocket extends WebSocket {
+  isAlive?: boolean;
+}
+
+/**
+ * Clean up watch connection state
+ * IMPORTANT: Guarded by socket identity to prevent race conditions
+ * where an old socket's close event kills a new connection
+ */
+function cleanupWatchConnection(reason: string, ws?: WebSocket) {
+  // Only clean up if this is still the active watch (or no ws specified)
+  if (ws && watchClient !== ws) {
+    logVerbose(`Skip cleanup for stale ws: ${reason}`);
+    return;
+  }
+
+  if (watchPingInterval) {
+    clearInterval(watchPingInterval);
+    watchPingInterval = null;
+  }
+  if (watchClient) {
+    log(`Cleaning up watch connection: ${reason}`);
+    if (
+      watchClient.readyState === WebSocket.OPEN ||
+      watchClient.readyState === WebSocket.CONNECTING
+    ) {
+      try {
+        watchClient.terminate(); // Force close
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+    watchClient = null;
+    watchDeviceName = null;
+    sendWatchStatus(false);
+  }
+}
+
+/**
+ * Start ping/pong heartbeat for watch connection
+ * Uses per-socket isAlive flag for proper liveness detection
+ */
+function startWatchHeartbeat(ws: WatchWebSocket) {
+  ws.isAlive = true;
+
+  ws.on("pong", () => {
+    ws.isAlive = true;
+    logVerbose("Watch pong received");
+  });
+
+  watchPingInterval = setInterval(() => {
+    // Guard: only process if this is still the active watch
+    if (watchClient !== ws) {
+      logVerbose("Heartbeat for stale socket, stopping");
+      return;
+    }
+
+    if (!ws.isAlive) {
+      log("Watch heartbeat timeout - no pong received");
+      cleanupWatchConnection("heartbeat timeout", ws);
+      return;
+    }
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.isAlive = false;
+      ws.ping();
+      logVerbose("Watch ping sent");
+    } else {
+      log(`Watch in unexpected state: ${ws.readyState}`);
+      cleanupWatchConnection("unexpected socket state", ws);
+    }
+  }, PING_INTERVAL_MS);
+}
 
 // Active session tracking (set by browser when creating session)
 let activeSessionId: string | null = null;
@@ -182,16 +260,29 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 });
 
 function handleWatchConnection(ws: WebSocket) {
-  // Only allow one watch connection at a time
-  if (watchClient && watchClient.readyState === WebSocket.OPEN) {
-    log("Rejecting second watch connection — one already active");
-    ws.close(4001, "Another watch is already connected.");
-    return;
+  // Check if there's an existing watch connection
+  if (watchClient) {
+    const isOpen = watchClient.readyState === WebSocket.OPEN;
+    const isAlive = (watchClient as WatchWebSocket).isAlive === true;
+
+    // Only reject if connection is open AND confirmed alive by heartbeat
+    if (isOpen && isAlive) {
+      log("Rejecting second watch connection — one already active");
+      ws.close(4001, "Another watch is already connected.");
+      return;
+    }
+
+    // Existing connection is stale (either closed or no recent pong)
+    log("Existing watch connection is stale, replacing");
+    cleanupWatchConnection("stale connection detected on new connect", watchClient);
   }
 
   watchClient = ws;
   watchDeviceName = null;
   log("Watch connected");
+
+  // Start heartbeat monitoring
+  startWatchHeartbeat(ws as WatchWebSocket);
 
   ws.on("message", (raw: Buffer) => {
     const data = raw.toString();
@@ -229,13 +320,12 @@ function handleWatchConnection(ws: WebSocket) {
     log(
       `Watch disconnected: code=${code}, reason=${reason.toString() || "none"}`
     );
-    watchClient = null;
-    watchDeviceName = null;
-    sendWatchStatus(false);
+    cleanupWatchConnection("close event", ws);
   });
 
   ws.on("error", (err: Error) => {
     log(`Watch connection error: ${err.message}`);
+    cleanupWatchConnection("error event", ws);
   });
 
   // Notify browsers that watch is connected
@@ -293,6 +383,7 @@ function getLocalIp(): string {
 // Graceful shutdown
 process.on("SIGINT", () => {
   log("Shutting down...");
+  cleanupWatchConnection("server shutdown");
   closeDatabase();
   wss.close();
   httpServer.close();

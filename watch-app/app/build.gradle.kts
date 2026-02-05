@@ -4,8 +4,8 @@ import java.io.FileInputStream
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.google.devtools.ksp")
 }
 
 // Keystore properties
@@ -54,6 +54,10 @@ android {
         compose = true
     }
 
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.10"
+    }
+
     kotlinOptions {
         jvmTarget = "1.8"
     }
@@ -68,7 +72,7 @@ dependencies {
     // Samsung Health Sensor SDK — not on Maven Central.
     // Download from: https://developer.samsung.com/health/sensor
     // Place the AAR in app/libs/
-    implementation(files("libs/samsung-health-sensor-api.aar"))
+    implementation(files("libs/samsung-health-sensor-api-1.4.1.aar"))
 
     // Wear OS Compose - Use consistent versions
     implementation("androidx.wear.compose:compose-material:1.2.1")
@@ -100,6 +104,11 @@ dependencies {
 
     // Ongoing Activity API
     implementation("androidx.wear:wear-ongoing:1.1.0")
+
+    // Room for local data persistence
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
 
     // Testing
     testImplementation("junit:junit:4.13.2")

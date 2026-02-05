@@ -22,8 +22,17 @@ class WebSocketManager(private val callback: ConnectionCallback) {
         fun onError(message: String)
     }
 
+    /**
+     * Additional callback for sync triggers.
+     * Set by SensorRepository to trigger sync when connection is established.
+     */
+    var onConnectedForSync: (() -> Unit)? = null
+
     @Volatile
     private var webSocket: WebSocket? = null
+
+    @Volatile
+    private var connected = false
 
     @Volatile
     private var isIntentionalClose = false
@@ -32,6 +41,7 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS) // No read timeout for WebSocket
+        .pingInterval(15, TimeUnit.SECONDS)    // Client-side keepalive for NAT traversal
         .build()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -55,7 +65,10 @@ class WebSocketManager(private val callback: ConnectionCallback) {
     }
 
     private fun doConnect(url: String) {
-        webSocket?.cancel()
+        // Graceful close to avoid 1006 on server (cancel() causes abnormal closure)
+        webSocket?.close(1000, "Reconnecting")
+        webSocket = null
+
         val request = Request.Builder()
             .url(url)
             .build()
@@ -76,6 +89,12 @@ class WebSocketManager(private val callback: ConnectionCallback) {
         return webSocket?.send(message) ?: false
     }
 
+    /**
+     * Check if WebSocket is currently connected.
+     * Used by SensorRepository to determine if sync should be attempted.
+     */
+    fun isConnected(): Boolean = connected
+
     fun destroy() {
         Log.i(TAG, "Destroying WebSocketManager")
         isIntentionalClose = true
@@ -89,7 +108,12 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
         override fun onOpen(ws: WebSocket, response: Response) {
             Log.i(TAG, "Connected to relay server")
+            connected = true
             reconnectDelay = INITIAL_DELAY_MS
+
+            // Cancel any pending reconnect job to prevent race conditions
+            reconnectJob?.cancel()
+            reconnectJob = null
 
             val handshake = HandshakeMessage(
                 deviceName = deviceName,
@@ -100,10 +124,14 @@ class WebSocketManager(private val callback: ConnectionCallback) {
             Log.d(TAG, "Sent handshake: ${handshake.deviceName}, sensors: ${sensors.joinToString()}")
 
             callback.onConnected()
+
+            // Trigger sync of pending batches
+            onConnectedForSync?.invoke()
         }
 
         override fun onClosed(ws: WebSocket, code: Int, reason: String) {
             Log.i(TAG, "Connection closed: code=$code, reason=$reason")
+            connected = false
             webSocket = null
             callback.onDisconnected(code, reason)
 
@@ -118,7 +146,10 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
             Log.e(TAG, "Connection failure: ${t.message}")
+            connected = false
             webSocket = null
+            // Notify UI of disconnect (onFailure doesn't call onClosed)
+            callback.onDisconnected(1006, t.message ?: "abnormal closure")
             callback.onError("Connection failed — retrying...")
             scheduleReconnect(url)
         }
