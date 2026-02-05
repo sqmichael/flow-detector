@@ -41,6 +41,7 @@ class WebSocketManager(private val callback: ConnectionCallback) {
 
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS) // No read timeout for WebSocket
+        .pingInterval(15, TimeUnit.SECONDS)    // Client-side keepalive for NAT traversal
         .build()
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -64,7 +65,10 @@ class WebSocketManager(private val callback: ConnectionCallback) {
     }
 
     private fun doConnect(url: String) {
-        webSocket?.cancel()
+        // Graceful close to avoid 1006 on server (cancel() causes abnormal closure)
+        webSocket?.close(1000, "Reconnecting")
+        webSocket = null
+
         val request = Request.Builder()
             .url(url)
             .build()
@@ -107,6 +111,10 @@ class WebSocketManager(private val callback: ConnectionCallback) {
             connected = true
             reconnectDelay = INITIAL_DELAY_MS
 
+            // Cancel any pending reconnect job to prevent race conditions
+            reconnectJob?.cancel()
+            reconnectJob = null
+
             val handshake = HandshakeMessage(
                 deviceName = deviceName,
                 sensors = sensors,
@@ -140,6 +148,8 @@ class WebSocketManager(private val callback: ConnectionCallback) {
             Log.e(TAG, "Connection failure: ${t.message}")
             connected = false
             webSocket = null
+            // Notify UI of disconnect (onFailure doesn't call onClosed)
+            callback.onDisconnected(1006, t.message ?: "abnormal closure")
             callback.onError("Connection failed — retrying...")
             scheduleReconnect(url)
         }
