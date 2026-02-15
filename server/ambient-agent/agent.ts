@@ -29,6 +29,8 @@ import {
 } from "./interventions";
 import { InterventionLogger, EnergyLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
+import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
+import { buildOpenClawContext } from "./openclaw-context";
 import {
   DEFAULT_CONFIG,
   type AmbientAgentConfig,
@@ -36,6 +38,8 @@ import {
   type PersonalBaseline,
   type Intervention,
   type BatchMessage,
+  type OpenClawResponse,
+  type OpenClawAction,
 } from "./types";
 
 // Memory layer for warmth tracking
@@ -129,8 +133,15 @@ export class AmbientAgent {
   // Heartbeat interval (debug notifications)
   private heartbeatInterval: NodeJS.Timeout | null = null;
 
-  constructor(config: Partial<AmbientAgentConfig> = {}) {
+  // OpenClaw control
+  private useOpenClaw: boolean;
+
+  // Track executed decision IDs for idempotency
+  private executedDecisions: Set<string> = new Set();
+
+  constructor(config: Partial<AmbientAgentConfig> = {}, options?: { useOpenClaw?: boolean }) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.useOpenClaw = options?.useOpenClaw ?? this.config.openclaw.enabled;
     this.hrvCalculator = new HRVCalculator();
     this.logger = new InterventionLogger(this.config.logPath);
     this.energyLogger = new EnergyLogger(
@@ -141,6 +152,7 @@ export class AmbientAgent {
     this.state = this.createInitialState();
 
     this.log("Ambient Agent initialized");
+    this.log(`OpenClaw: ${this.useOpenClaw ? "ENABLED" : "DISABLED (using reasoning.ts)"}`);
     this.log("Config:", JSON.stringify(this.config, null, 2));
   }
 
@@ -397,10 +409,10 @@ export class AmbientAgent {
   // ── Processing Loop ─────────────────────────────────────────────
 
   private startProcessingLoop(): void {
-    // Process every 10 seconds
+    // Process every 30 seconds (accommodates OpenClaw CLI latency)
     this.processingInterval = setInterval(() => {
       this.processDetection();
-    }, 10000);
+    }, 30000);
   }
 
   // ── Heartbeat (Debug) ──────────────────────────────────────────────
@@ -446,23 +458,248 @@ export class AmbientAgent {
       }
     }
 
+    // Run all detectors to update state (always needed for status display)
+    this.updateDetectorState();
+
     // Check quiet hours - no interventions during sleep
     if (isInQuietHours(this.config)) {
-      return; // Respect quiet hours
+      return;
     }
 
-    // Check intervention limits
+    // Check intervention limits (executor-side enforcement)
     if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
-      return; // Max interventions reached for today
+      return;
     }
 
-    // Process each behavior
-    await this.processFlowProtection();
-    await this.processStressDetection();
-    await this.processEveningReflection();
+    // Check if any detector flagged something worth deciding on
+    const needsDecision = this.needsDecision();
+
+    if (needsDecision) {
+      if (this.useOpenClaw && !isInFallbackMode(this.config.openclaw)) {
+        await this.processViaOpenClaw();
+      } else {
+        // Fallback: use reasoning.ts (original per-behavior path)
+        await this.processViaReasoning();
+      }
+    }
+
+    // Handle flow mode exit (always check, regardless of OpenClaw)
+    await this.checkFlowModeExit();
 
     // Silent energy state logging (no intervention)
     await this.logEnergyState();
+  }
+
+  /**
+   * Update detector state from sensor data (no decisions, just state tracking)
+   */
+  private updateDetectorState(): void {
+    // Flow detection
+    const flowDetection = detectFlowState(this.hrHistory, this.config.flowDetection);
+    this.state.flowProtection.stableMinutes = flowDetection.stableMinutes;
+
+    // Stress detection
+    const stressDetection = detectStressPattern(
+      this.state.currentHR,
+      this.state.currentHRV,
+      this.state.baseline,
+      this.state.stressDetection.elevationStartedAt,
+      this.config.stressDetection
+    );
+
+    if (stressDetection.isStressed && !this.state.stressDetection.isElevated) {
+      this.state.stressDetection.isElevated = true;
+      this.state.stressDetection.elevationStartedAt = Date.now();
+    } else if (!stressDetection.isStressed) {
+      this.state.stressDetection.isElevated = false;
+      this.state.stressDetection.elevationStartedAt = null;
+    }
+    this.state.stressDetection.elevatedMinutes = stressDetection.elevatedMinutes;
+  }
+
+  /**
+   * Check if any detection warrants an LLM decision
+   */
+  private needsDecision(): boolean {
+    const flow = detectFlowState(this.hrHistory, this.config.flowDetection);
+    if (flow.shouldEnterFlowMode && !this.state.flowProtection.inFlowMode) return true;
+
+    if (
+      this.state.stressDetection.isElevated &&
+      this.state.stressDetection.elevatedMinutes >= this.config.stressDetection.durationMinutes &&
+      !this.state.stressDetection.checkinOfferedToday
+    ) return true;
+
+    const recovery = shouldTriggerEveningReflection(
+      this.state.currentHR,
+      this.state.currentHRV,
+      this.state.baseline,
+      this.state.eveningReflection.reflectionOfferedToday,
+      this.config.eveningReflection,
+      this.config.quietHours.timezoneOffset
+    );
+    if (recovery.shouldTrigger) return true;
+
+    return false;
+  }
+
+  // ── OpenClaw Decision Path ─────────────────────────────────────
+
+  private async processViaOpenClaw(): Promise<void> {
+    const context = buildOpenClawContext(
+      this.state,
+      this.state.baseline,
+      this.state.interventionsToday,
+      this.config.maxInterventionsPerDay,
+      this.config.quietHours.timezoneOffset
+    );
+
+    const message = JSON.stringify(context);
+    const response = await queryOpenClaw(message, this.config.openclaw);
+
+    this.log(`[OpenClaw] Response: ${response.reasoning}`);
+
+    if (!response.shouldIntervene || response.actions.length === 0) {
+      return;
+    }
+
+    // Idempotency check
+    if (response.decisionId && this.executedDecisions.has(response.decisionId)) {
+      this.log(`[OpenClaw] Skipping duplicate decision: ${response.decisionId}`);
+      return;
+    }
+
+    // Executor-side enforcement: check limits again
+    if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
+      this.log(`[OpenClaw] Executor blocked: max interventions reached`);
+      return;
+    }
+
+    await this.executeOpenClawActions(response);
+
+    if (response.decisionId) {
+      this.executedDecisions.add(response.decisionId);
+    }
+  }
+
+  /**
+   * Execute OpenClaw action plan by mapping action types to existing intervention functions
+   */
+  private async executeOpenClawActions(response: OpenClawResponse): Promise<void> {
+    for (const action of response.actions) {
+      this.log(`[OpenClaw] Executing action: ${action.type}`);
+
+      switch (action.type) {
+        case "enable_focus_mode": {
+          if (!this.state.flowProtection.inFlowMode) {
+            this.state.flowProtection.inFlowMode = true;
+            this.state.flowProtection.flowModeStartedAt = Date.now();
+
+            const intervention = createIntervention("flow_protection", response.reasoning, {
+              hr: this.state.currentHR ?? undefined,
+              hrv: this.state.currentHRV ?? undefined,
+              flowDurationMinutes: this.state.flowProtection.stableMinutes,
+            });
+
+            this.state.interventionsToday.push(intervention);
+            await this.logger.logIntervention(intervention);
+            await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          }
+          break;
+        }
+
+        case "disable_focus_mode": {
+          if (this.state.flowProtection.inFlowMode) {
+            this.state.flowProtection.inFlowMode = false;
+            this.state.flowProtection.flowModeStartedAt = null;
+            await disableFocusMode();
+          }
+          break;
+        }
+
+        case "send_haptic": {
+          const { sendWatchHaptic } = await import("./interventions");
+          await sendWatchHaptic(this.ws, action.pattern || "gentle");
+          break;
+        }
+
+        case "send_push": {
+          const msg = action.message || "Checking in";
+          const intervention = createIntervention("proactive_checkin", response.reasoning, {
+            hr: this.state.currentHR ?? undefined,
+            hrv: this.state.currentHRV ?? undefined,
+          });
+          intervention.trigger.reason = msg;
+
+          this.state.stressDetection.checkinOfferedToday = true;
+          this.state.interventionsToday.push(intervention);
+          await this.logger.logIntervention(intervention);
+          await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          break;
+        }
+
+        case "trigger_call": {
+          const { triggerPhoneCall } = await import("./interventions");
+          const intervention = createIntervention("proactive_checkin", response.reasoning, {
+            hr: this.state.currentHR ?? undefined,
+            hrv: this.state.currentHRV ?? undefined,
+          });
+
+          this.state.stressDetection.checkinOfferedToday = true;
+          this.state.interventionsToday.push(intervention);
+          await this.logger.logIntervention(intervention);
+          await triggerPhoneCall(this.config.phoneNumber, "stress_check_in", action.message);
+          break;
+        }
+
+        case "send_reflection": {
+          const intervention = createIntervention("evening_reflection", response.reasoning, {
+            hr: this.state.currentHR ?? undefined,
+            hrv: this.state.currentHRV ?? undefined,
+          });
+
+          this.state.eveningReflection.reflectionOfferedToday = true;
+          this.state.eveningReflection.reflectionOfferedAt = Date.now();
+          this.state.interventionsToday.push(intervention);
+          await this.logger.logIntervention(intervention);
+          await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          break;
+        }
+
+        case "no_action":
+          break;
+      }
+    }
+  }
+
+  // ── Fallback: reasoning.ts Path (original behavior) ────────────
+
+  private async processViaReasoning(): Promise<void> {
+    this.log("[Fallback] Using reasoning.ts for decision");
+
+    await this.processFlowProtection();
+    await this.processStressDetection();
+    await this.processEveningReflection();
+  }
+
+  /**
+   * Check if flow mode should be exited (HR became unstable)
+   * Runs independently of OpenClaw/reasoning decision path
+   */
+  private async checkFlowModeExit(): Promise<void> {
+    const detection = detectFlowState(this.hrHistory, this.config.flowDetection);
+
+    if (!detection.shouldEnterFlowMode && this.state.flowProtection.inFlowMode) {
+      const flowDuration = this.state.flowProtection.flowModeStartedAt
+        ? Math.floor((Date.now() - this.state.flowProtection.flowModeStartedAt) / (60 * 1000))
+        : 0;
+
+      this.log(`Flow mode ended after ${flowDuration} minutes`);
+
+      this.state.flowProtection.inFlowMode = false;
+      this.state.flowProtection.flowModeStartedAt = null;
+      await disableFocusMode();
+    }
   }
 
   private async logEnergyState(): Promise<void> {
@@ -473,20 +710,15 @@ export class AmbientAgent {
       this.config.quietHours.timezoneOffset
     );
 
-    // Logger handles throttling and filtering
     await this.energyLogger.logState(energyState);
   }
 
-  // ── Behavior A: Flow Protection ─────────────────────────────────
+  // ── Behavior A: Flow Protection (fallback path) ────────────────
 
   private async processFlowProtection(): Promise<void> {
     const detection = detectFlowState(this.hrHistory, this.config.flowDetection);
 
-    this.state.flowProtection.stableMinutes = detection.stableMinutes;
-
-    // Enter flow mode
     if (detection.shouldEnterFlowMode && !this.state.flowProtection.inFlowMode) {
-      // Ask LLM for judgment
       const reasoningInput = buildReasoningInput(
         "flow",
         `Stable HR (variance ${detection.hrVariance.toFixed(1)} bpm) for ${detection.stableMinutes} minutes`,
@@ -516,26 +748,11 @@ export class AmbientAgent {
       await this.logger.logIntervention(intervention);
       await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
     }
-
-    // Exit flow mode (HR became unstable)
-    if (!detection.shouldEnterFlowMode && this.state.flowProtection.inFlowMode) {
-      const flowDuration = this.state.flowProtection.flowModeStartedAt
-        ? Math.floor((Date.now() - this.state.flowProtection.flowModeStartedAt) / (60 * 1000))
-        : 0;
-
-      this.log(`Flow mode ended after ${flowDuration} minutes`);
-
-      this.state.flowProtection.inFlowMode = false;
-      this.state.flowProtection.flowModeStartedAt = null;
-
-      await disableFocusMode();
-    }
   }
 
-  // ── Behavior B: Proactive Check-in ──────────────────────────────
+  // ── Behavior B: Proactive Check-in (fallback path) ─────────────
 
   private async processStressDetection(): Promise<void> {
-    // Skip if already offered today
     if (this.state.stressDetection.checkinOfferedToday) return;
 
     const detection = detectStressPattern(
@@ -546,20 +763,7 @@ export class AmbientAgent {
       this.config.stressDetection
     );
 
-    // Update state
-    if (detection.isStressed && !this.state.stressDetection.isElevated) {
-      this.state.stressDetection.isElevated = true;
-      this.state.stressDetection.elevationStartedAt = Date.now();
-    } else if (!detection.isStressed) {
-      this.state.stressDetection.isElevated = false;
-      this.state.stressDetection.elevationStartedAt = null;
-    }
-
-    this.state.stressDetection.elevatedMinutes = detection.elevatedMinutes;
-
-    // Trigger check-in
     if (detection.shouldTriggerCheckin) {
-      // Ask LLM for judgment
       const reasoningInput = buildReasoningInput(
         "stress",
         `Elevated HR + suppressed HRV for ${detection.elevatedMinutes} minutes`,
@@ -578,15 +782,10 @@ export class AmbientAgent {
 
       this.state.stressDetection.checkinOfferedToday = true;
 
-      const intervention = createIntervention(
-        "proactive_checkin",
-        decision.reasoning,
-        {
-          hr: this.state.currentHR ?? undefined,
-          hrv: this.state.currentHRV ?? undefined,
-        }
-      );
-      // Use LLM's custom message if provided
+      const intervention = createIntervention("proactive_checkin", decision.reasoning, {
+        hr: this.state.currentHR ?? undefined,
+        hrv: this.state.currentHRV ?? undefined,
+      });
       if (decision.message) {
         intervention.trigger.reason = decision.message;
       }
@@ -600,7 +799,7 @@ export class AmbientAgent {
     }
   }
 
-  // ── Behavior C: Evening Reflection ──────────────────────────────
+  // ── Behavior C: Evening Reflection (fallback path) ─────────────
 
   private async processEveningReflection(): Promise<void> {
     const trigger = shouldTriggerEveningReflection(
@@ -613,7 +812,6 @@ export class AmbientAgent {
     );
 
     if (trigger.shouldTrigger) {
-      // Ask LLM for judgment
       const reasoningInput = buildReasoningInput(
         "recovery",
         trigger.reason,
@@ -703,6 +901,17 @@ export class AmbientAgent {
     const warmthDesc = getWarmthDescription(userState.warmth_level);
     lines.push(`║ Kai warmth: ${warmthDesc} (${userState.warmth_level.toFixed(1)})`.padEnd(37) + "║");
 
+    // OpenClaw status
+    if (this.useOpenClaw) {
+      const ocStatus = getOpenClawStatus();
+      const ocMode = ocStatus.inFallback
+        ? `FALLBACK (${Math.ceil((ocStatus.fallbackRemainingMs ?? 0) / 1000)}s)`
+        : `ACTIVE (${ocStatus.consecutiveFailures} fails)`;
+      lines.push(`║ OpenClaw: ${ocMode}`.padEnd(37) + "║");
+    } else {
+      lines.push("║ OpenClaw: DISABLED".padEnd(37) + "║");
+    }
+
     // Local time and quiet hours status
     const now = new Date();
     const utcHour = now.getUTCHours();
@@ -734,9 +943,12 @@ export class AmbientAgent {
 
 let agentInstance: AmbientAgent | null = null;
 
-export function getAgent(config?: Partial<AmbientAgentConfig>): AmbientAgent {
+export function getAgent(
+  config?: Partial<AmbientAgentConfig>,
+  options?: { useOpenClaw?: boolean }
+): AmbientAgent {
   if (!agentInstance) {
-    agentInstance = new AmbientAgent(config);
+    agentInstance = new AmbientAgent(config, options);
   }
   return agentInstance;
 }

@@ -69,22 +69,25 @@ Output JSON only:
 export async function decideIntervention(
   input: ReasoningInput
 ): Promise<ReasoningOutput> {
+  const userPrompt = JSON.stringify(input);
+  console.log(`[Reasoning] Input: ${userPrompt}`);
+  console.log(`[Reasoning] Using OpenRouter (${MODEL})`);
+
   if (!OPENROUTER_API_KEY) {
     console.log("[Reasoning] No API key - fallback mode");
     return fallbackDecision(input);
   }
 
-  const userPrompt = JSON.stringify(input);
-  console.log(`[Reasoning] Input: ${userPrompt}`);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+    "HTTP-Referer": "https://flow-detector.local",
+  };
 
   try {
     const response = await fetch(OPENROUTER_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        "HTTP-Referer": "https://flow-detector.local",
-      },
+      headers,
       body: JSON.stringify({
         model: MODEL,
         messages: [

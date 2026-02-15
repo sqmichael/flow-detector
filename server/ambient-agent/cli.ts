@@ -238,18 +238,24 @@ async function runFixedTimeMode(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const command = process.argv[2] || "start";
+  // Find the first non-flag argument as the command
+  const command = process.argv.slice(2).find((arg) => !arg.startsWith("--")) || "start";
 
   console.log("\n╔════════════════════════════════════╗");
   console.log("║      AMBIENT AGENT PROTOTYPE       ║");
   console.log("║   Felt-Experience Intervention Test ║");
   console.log("╚════════════════════════════════════╝\n");
 
+  const noOpenClaw = process.argv.includes("--no-openclaw");
+
   switch (command) {
     case "start":
       console.log("Starting sensor-triggered mode...\n");
+      if (noOpenClaw) {
+        console.log("OpenClaw DISABLED (--no-openclaw flag). Using reasoning.ts fallback.\n");
+      }
       startRatingServer(); // Start rating server for ntfy button callbacks
-      const agent = getAgent();
+      const agent = getAgent(undefined, { useOpenClaw: !noOpenClaw });
       await agent.start();
       await showStatus(true);
       break;
@@ -275,7 +281,7 @@ async function main(): Promise<void> {
       break;
 
     default:
-      console.log("Usage: npx tsx server/ambient-agent/cli.ts [command]");
+      console.log("Usage: npx tsx server/ambient-agent/cli.ts [command] [options]");
       console.log("");
       console.log("Commands:");
       console.log("  start     Start the agent in sensor-triggered mode");
@@ -283,6 +289,9 @@ async function main(): Promise<void> {
       console.log("  rate      Rate the last intervention");
       console.log("  compare   Compare sensor-triggered vs fixed-time days");
       console.log("  fixed     Run in fixed-time mode (control condition)");
+      console.log("");
+      console.log("Options:");
+      console.log("  --no-openclaw  Disable OpenClaw, use reasoning.ts fallback");
       console.log("");
       rl.close();
   }
