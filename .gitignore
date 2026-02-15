@@ -32,6 +32,9 @@ watch-app/local.properties
 watch-app/app/libs/*.aar
 tsconfig.tsbuildinfo
 
+# Eval results (runtime data)
+eval-results/
+
 # Sensor fusion database
 server/data/
 .claude/orchestrator/state.json
