@@ -42,16 +42,19 @@ class SensorRepository(
      * Save a batch locally and attempt to sync if connected.
      * This is the primary entry point for new sensor data.
      */
-    suspend fun saveBatch(batch: SensorBatch) {
+    suspend fun saveBatch(batch: SensorBatch, preSynced: Boolean = false) {
+        // If already sent directly (e.g. with transient location data), mark as synced
+        val batchToSave = if (preSynced) batch.copy(synced = true) else batch
+
         // Always save locally first
-        val id = dao.insert(batch)
-        Log.d(TAG, "Saved batch locally: id=$id, timestamp=${batch.timestamp}")
+        val id = dao.insert(batchToSave)
+        Log.d(TAG, "Saved batch locally: id=$id, timestamp=${batch.timestamp}, preSynced=$preSynced")
 
         // Update pending count
         _pendingCount.value = dao.getUnsyncedCount()
 
-        // Try to sync if connected
-        if (webSocketManager.isConnected()) {
+        // Try to sync remaining unsynced if connected (and this wasn't already sent)
+        if (!preSynced && webSocketManager.isConnected()) {
             syncUnsynced()
         }
     }

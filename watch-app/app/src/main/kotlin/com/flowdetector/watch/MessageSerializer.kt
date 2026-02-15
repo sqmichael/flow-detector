@@ -85,6 +85,13 @@ data class AccelAggregate(
     val samples: Int
 )
 
+@Serializable
+data class LocationAggregate(
+    val latitude: Float,
+    val longitude: Float,
+    val accuracy: Float
+)
+
 /**
  * 30-second aggregated batch message.
  * Reduces bandwidth from ~3-5 MB/day (1Hz) to ~200 KB/day.
@@ -98,6 +105,7 @@ data class BatchMessage(
     val eda: EdaAggregate,
     val ppg: PpgAggregate? = null,
     val accel: AccelAggregate? = null,
+    val location: LocationAggregate? = null,
     val timestamp: Long
 ) {
     fun toJson(): String = json.encodeToString(this)

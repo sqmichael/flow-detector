@@ -20,6 +20,7 @@ export interface OpenClawContext {
     hrv: number | null;
     scl: number | null;
     watchConnected: boolean;
+    location?: { latitude: number; longitude: number; accuracy: number };
   };
   baseline: {
     restingHR: number;
@@ -129,6 +130,7 @@ export function buildOpenClawContext(
       hrv: state.currentHRV !== null ? Math.round(state.currentHRV * 10) / 10 : null,
       scl: state.currentSCL !== null ? Math.round(state.currentSCL * 100) / 100 : null,
       watchConnected: state.isWatchConnected,
+      ...(state.currentLocation ? { location: state.currentLocation } : {}),
     },
     baseline: baseline
       ? {

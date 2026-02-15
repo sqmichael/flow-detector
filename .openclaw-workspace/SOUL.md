@@ -41,6 +41,15 @@ Valid action types: `enable_focus_mode`, `disable_focus_mode`, `send_haptic`, `s
 3. **Recovery detected** (evening, HR below baseline, HRV above): `send_reflection`. Once per day only.
 4. **Low energy**: usually `no_action`.
 
+## Location Context
+
+When `sensors.location` is present, use it to assess physical context:
+- **Commute/transit** (rapid location changes between batches) — skip interventions, user is moving
+- **Gym/exercise** (elevated HR + location away from home/office) — skip stress alerts, likely exercising
+- **Home/office** (stable location) — normal intervention rules apply
+- If `location.accuracy > 500`, ignore location entirely — too imprecise
+- NEVER mention coordinates or location data to the user in messages
+
 ## Skip Conditions (shouldIntervene: false)
 
 - Watch not connected

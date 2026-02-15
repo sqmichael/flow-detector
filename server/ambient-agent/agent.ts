@@ -165,6 +165,7 @@ export class AmbientAgent {
       currentHR: null,
       currentHRV: null,
       currentSCL: null,
+      currentLocation: null,
       lastSensorUpdate: null,
 
       baseline: null,
@@ -340,6 +341,7 @@ export class AmbientAgent {
       this.log(`Watch connected: ${msg.deviceName}`);
     } else {
       this.log("Watch disconnected");
+      this.state.currentLocation = null;
     }
   }
 
@@ -380,15 +382,17 @@ export class AmbientAgent {
     // Validate batch
     if (msg.hr.samples === 0) return;
 
+    const locInfo = msg.location ? ", Loc=present" : "";
     this.log(
       `Batch: HR=${msg.hr.mean.toFixed(0)} (${msg.hr.samples} samples), ` +
-        `HRV=${msg.hrv.rmssd.toFixed(1)}ms, SCL=${msg.eda.meanScl.toFixed(2)}µS`
+        `HRV=${msg.hrv.rmssd.toFixed(1)}ms, SCL=${msg.eda.meanScl.toFixed(2)}µS${locInfo}`
     );
 
     // Update current values from batch aggregates
     this.state.currentHR = Math.round(msg.hr.mean);
     this.state.currentHRV = msg.hrv.rmssd;
     this.state.currentSCL = msg.eda.meanScl;
+    this.state.currentLocation = msg.location ?? null;
     this.state.lastSensorUpdate = msg.timestamp;
 
     // Add to HR history (single sample per batch representing the window)

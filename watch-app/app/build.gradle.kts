@@ -105,6 +105,9 @@ dependencies {
     // Ongoing Activity API
     implementation("androidx.wear:wear-ongoing:1.1.0")
 
+    // Google Play Services Location (for FusedLocationProviderClient)
+    implementation("com.google.android.gms:play-services-location:21.1.0")
+
     // Room for local data persistence
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

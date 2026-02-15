@@ -142,10 +142,25 @@ fun FlowDetectorWatchApp(
         sensorPermissionGranted = granted
     }
 
+    // Location permission is optional — request silently after sensor permission granted
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> /* Location is best-effort, no UI change needed */ }
+
     // Check sensor permission on launch
     LaunchedEffect(Unit) {
         val sensorCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.BODY_SENSORS)
         sensorPermissionGranted = (sensorCheck == android.content.pm.PackageManager.PERMISSION_GRANTED)
+    }
+
+    // Request location permission after sensor permission is granted
+    LaunchedEffect(sensorPermissionGranted) {
+        if (sensorPermissionGranted) {
+            val locCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (locCheck != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                locationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+        }
     }
 
     MaterialTheme {

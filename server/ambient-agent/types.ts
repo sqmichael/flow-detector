@@ -161,6 +161,7 @@ export interface AmbientAgentState {
   currentHR: number | null;
   currentHRV: number | null;
   currentSCL: number | null;
+  currentLocation: { latitude: number; longitude: number; accuracy: number } | null;
   lastSensorUpdate: number | null;
 
   /** Personal baselines */
@@ -356,6 +357,12 @@ export interface BatchMessage {
   eda: {
     meanScl: number;
     peakScl: number;
+  };
+  /** Location snapshot (optional, coarse GPS) */
+  location?: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
   };
   /** Batch timestamp (end of window) */
   timestamp: number;

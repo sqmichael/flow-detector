@@ -1,24 +1,35 @@
 package com.flowdetector.watch
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.Location
 import android.os.Binder
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.ongoing.OngoingActivity
 import androidx.wear.ongoing.Status
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import com.samsung.android.service.health.tracking.ConnectionListener
 import com.samsung.android.service.health.tracking.HealthTracker
 import com.samsung.android.service.health.tracking.HealthTrackerException
@@ -202,14 +213,47 @@ class SensorService : LifecycleService() {
             )
         } else null
 
+        // Location snapshot (latest sample, transient — not persisted)
+        // Discard if: stale (>5min), bad GPS time, or too imprecise (>500m)
+        val locationAggregate = latestLocation?.let { loc ->
+            val ageMs = System.currentTimeMillis() - loc.time
+            when {
+                loc.time == 0L -> null  // Bad GPS time on some coarse fixes
+                ageMs > 5 * 60 * 1000L -> null  // Stale fix (e.g. indoors)
+                loc.accuracy > 500f -> null  // Too imprecise to be useful
+                else -> LocationAggregate(
+                    latitude = loc.latitude.toFloat(),
+                    longitude = loc.longitude.toFloat(),
+                    accuracy = loc.accuracy
+                )
+            }
+        }
+
         val timestamp = System.currentTimeMillis()
         val ppgInfo = ppgAggregate?.let { " PPG=${it.samples}samples" } ?: ""
         val accelInfo = accelAggregate?.let { " Stillness=${(it.stillness * 100).toInt()}%" } ?: ""
+        val locInfo = locationAggregate?.let { " Loc=present ±${it.accuracy.toInt()}m" } ?: ""
         Log.i(TAG, "Saving batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
-                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}$ppgInfo$accelInfo")
+                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}$ppgInfo$accelInfo$locInfo")
 
-        // Save to local database (local-first), then sync if connected
+        // Send location-enriched batch via WebSocket if connected,
+        // then save to Room (without location — transient context only)
         lifecycleScope.launch {
+            // Try to send the full message (with location) directly
+            val directSent = if (webSocketManager.isConnected()) {
+                val batchMsg = BatchMessage(
+                    hr = hrAggregate,
+                    hrv = hrvAggregate,
+                    eda = edaAggregate,
+                    ppg = ppgAggregate,
+                    accel = accelAggregate,
+                    location = locationAggregate,
+                    timestamp = timestamp
+                )
+                webSocketManager.send(batchMsg.toJson())
+            } else false
+
+            // Save to Room (without location) for durability
             val batch = sensorRepository.createBatch(
                 hr = hrAggregate,
                 hrv = hrvAggregate,
@@ -219,7 +263,7 @@ class SensorService : LifecycleService() {
                 timestamp = timestamp,
                 windowMs = BATCH_WINDOW_MS
             )
-            sensorRepository.saveBatch(batch)
+            sensorRepository.saveBatch(batch, preSynced = directSent)
         }
     }
 
@@ -293,11 +337,17 @@ class SensorService : LifecycleService() {
     private val sensorManager by lazy { getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     private var accelerometer: Sensor? = null
 
+    // Location via Google Play Services (coarse, battery-efficient)
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    @Volatile private var latestLocation: Location? = null
+    private var locationCallback: LocationCallback? = null
+
     // --- Lifecycle ---
 
     override fun onCreate() {
         super.onCreate()
         webSocketManager = WebSocketManager(webSocketCallback)
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         // Initialize Room database and repository
         val database = AppDatabase.getInstance(applicationContext)
@@ -386,8 +436,9 @@ class SensorService : LifecycleService() {
         edaTracker = null
         ppgTracker?.unsetEventListener()
         ppgTracker = null
-        // Unregister Android accelerometer listener
+        // Unregister Android accelerometer listener and stop location
         sensorManager.unregisterListener(accelSensorListener)
+        stopLocationUpdates()
         try {
             healthTrackingService?.disconnectService()
         } catch (e: Exception) {
@@ -516,6 +567,16 @@ class SensorService : LifecycleService() {
             Log.i(TAG, "Accelerometer registered via SensorManager")
         } else {
             Log.w(TAG, "Accelerometer sensor not available")
+        }
+
+        // Location via FusedLocationProviderClient (coarse, one per batch window)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startLocationUpdates()
+            activeSensors.add("location")
+        } else {
+            Log.w(TAG, "ACCESS_COARSE_LOCATION not granted, skipping location")
         }
 
         webSocketManager.sensors = activeSensors
@@ -676,6 +737,36 @@ class SensorService : LifecycleService() {
         override fun onError(error: HealthTracker.TrackerError) {
             Log.e(TAG, "PPG_GREEN tracker error: $error")
         }
+    }
+
+    // --- Location Updates (FusedLocationProviderClient) ---
+
+    @Suppress("MissingPermission") // Permission checked before calling
+    private fun startLocationUpdates() {
+        val request = LocationRequest.Builder(BATCH_WINDOW_MS)
+            .setPriority(Priority.PRIORITY_LOW_POWER)
+            .setMinUpdateIntervalMillis(BATCH_WINDOW_MS)
+            .build()
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { loc ->
+                    latestLocation = loc
+                    Log.d(TAG, "Location: ${loc.latitude},${loc.longitude} ±${loc.accuracy}m")
+                }
+            }
+        }
+
+        fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
+        Log.i(TAG, "Location updates started (interval=${BATCH_WINDOW_MS / 1000}s, LOW_POWER)")
+    }
+
+    private fun stopLocationUpdates() {
+        locationCallback?.let {
+            fusedLocationClient.removeLocationUpdates(it)
+            locationCallback = null
+        }
+        latestLocation = null
     }
 
     // --- Accelerometer Listener (Android SensorManager) ---
