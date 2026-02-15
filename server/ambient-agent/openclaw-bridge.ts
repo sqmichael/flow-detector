@@ -179,9 +179,46 @@ function spawnOpenClaw(
         return;
       }
 
-      // Parse JSON from stdout — strip markdown fences if present
+      // Parse JSON from stdout — handle OpenClaw CLI envelope + markdown fences
       try {
         let jsonStr = stdout.trim();
+
+        // OpenClaw --json wraps output in: {"payloads":[{"text":"```json\n{...}\n```"}]}
+        // Try to unwrap the envelope first
+        try {
+          const maybeEnvelope = JSON.parse(jsonStr);
+          if (maybeEnvelope?.payloads?.[0]?.text) {
+            jsonStr = maybeEnvelope.payloads[0].text;
+            console.log(`[OpenClaw] Unwrapped payloads envelope, inner text: ${jsonStr.slice(0, 100)}`);
+          }
+        } catch {
+          // Not valid JSON yet — might have extra text around the envelope
+          // Try to extract the payloads JSON substring
+          const payloadsIdx = jsonStr.indexOf('"payloads"');
+          if (payloadsIdx >= 0) {
+            const braceStart = jsonStr.lastIndexOf('{', payloadsIdx);
+            if (braceStart >= 0) {
+              // Find matching closing brace by counting
+              let depth = 0;
+              let braceEnd = -1;
+              for (let i = braceStart; i < jsonStr.length; i++) {
+                if (jsonStr[i] === '{') depth++;
+                else if (jsonStr[i] === '}') { depth--; if (depth === 0) { braceEnd = i; break; } }
+              }
+              if (braceEnd > braceStart) {
+                try {
+                  const envelope = JSON.parse(jsonStr.slice(braceStart, braceEnd + 1));
+                  if (envelope?.payloads?.[0]?.text) {
+                    jsonStr = envelope.payloads[0].text;
+                    console.log(`[OpenClaw] Extracted payloads from mixed output, inner text: ${jsonStr.slice(0, 100)}`);
+                  }
+                } catch {
+                  // Still can't parse — continue with raw
+                }
+              }
+            }
+          }
+        }
 
         // Strip markdown code fences
         jsonStr = jsonStr
