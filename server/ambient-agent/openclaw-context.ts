@@ -1,9 +1,14 @@
 /**
  * OpenClaw Context Builder
  *
- * Constructs a compact (~300 token) JSON context from agent state
+ * Constructs a compact (~400 token) JSON context from agent state
  * for each OpenClaw decision request. Stateless — full context
  * passed each call to avoid session context blowout.
+ *
+ * Now includes calendar context fetched from Google Calendar via
+ * Smithery MCP endpoint. Calendar fetch is best-effort — if it
+ * fails, the context includes calendar: null and the agent decides
+ * without it (conservative default).
  */
 
 import type {
@@ -12,6 +17,182 @@ import type {
   Intervention,
 } from "./types";
 import { getUserState, getWarmthDescription } from "../calling/memory";
+
+// ── Calendar Types ──────────────────────────────────────────────────
+
+export interface CalendarEvent {
+  summary: string;
+  start: string;  // ISO timestamp or date
+  end: string;
+  status: "confirmed" | "tentative" | "cancelled";
+  eventType?: string;  // "default" | "focusTime" | "outOfOffice" | "workingLocation"
+}
+
+export interface CalendarContext {
+  /** Events in the next 2 hours */
+  upcoming: CalendarEvent[];
+  /** Whether there's a meeting/call happening right now */
+  inMeeting: boolean;
+  /** Summary of current meeting if in one */
+  currentMeeting: string | null;
+  /** Minutes until next event (null if none) */
+  minutesToNext: number | null;
+}
+
+// ── Calendar Fetch ──────────────────────────────────────────────────
+
+const SMITHERY_URL = "https://api.smithery.ai/connect/moose-7xil/googlesuper-nXzO/mcp";
+const SMITHERY_KEY = "aeb0b948-3503-4b3a-a137-b871518b9398";
+
+// Cache calendar results for 2 minutes to avoid hammering the API
+let calendarCache: { data: CalendarContext | null; fetchedAt: number } | null = null;
+const CALENDAR_CACHE_TTL_MS = 2 * 60 * 1000;
+
+/**
+ * Fetch upcoming calendar events from Google Calendar via Smithery MCP.
+ * Returns null on any failure — caller should treat as "unknown".
+ */
+export async function fetchCalendarContext(timezoneOffset: number): Promise<CalendarContext | null> {
+  // Check cache
+  if (calendarCache && (Date.now() - calendarCache.fetchedAt) < CALENDAR_CACHE_TTL_MS) {
+    return calendarCache.data;
+  }
+
+  try {
+    const now = new Date();
+    const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+    const body = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "find_event",
+        arguments: {
+          calendar_id: "primary",
+          timeMin: now.toISOString(),
+          timeMax: twoHoursLater.toISOString(),
+          single_events: true,
+          max_results: 5,
+          order_by: "startTime",
+        },
+      },
+    };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(SMITHERY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": `Bearer ${SMITHERY_KEY}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      console.log(`[Calendar] HTTP ${response.status}`);
+      calendarCache = { data: null, fetchedAt: Date.now() };
+      return null;
+    }
+
+    const result = await response.json() as {
+      result?: {
+        content?: Array<{ type: string; text: string }>;
+      };
+      error?: { message: string };
+    };
+
+    if (result.error) {
+      console.log(`[Calendar] MCP error: ${result.error.message}`);
+      calendarCache = { data: null, fetchedAt: Date.now() };
+      return null;
+    }
+
+    // Parse event data from MCP response
+    const textContent = result.result?.content?.find(c => c.type === "text");
+    if (!textContent) {
+      console.log("[Calendar] No text content in response");
+      calendarCache = { data: null, fetchedAt: Date.now() };
+      return null;
+    }
+
+    const events = parseCalendarEvents(textContent.text, now);
+    calendarCache = { data: events, fetchedAt: Date.now() };
+
+    const meetingStatus = events.inMeeting ? `IN MEETING: ${events.currentMeeting}` : "clear";
+    console.log(`[Calendar] ${events.upcoming.length} events, ${meetingStatus}`);
+
+    return events;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.log(`[Calendar] Fetch failed: ${msg}`);
+    calendarCache = { data: null, fetchedAt: Date.now() };
+    return null;
+  }
+}
+
+/**
+ * Parse raw calendar response text into structured events.
+ * Handles both JSON array and text-based formats from the MCP.
+ */
+function parseCalendarEvents(text: string, now: Date): CalendarContext {
+  const upcoming: CalendarEvent[] = [];
+  let inMeeting = false;
+  let currentMeeting: string | null = null;
+  let minutesToNext: number | null = null;
+
+  try {
+    // Try JSON parse first — MCP may return structured data
+    const parsed = JSON.parse(text);
+    const items = Array.isArray(parsed) ? parsed : parsed?.items || parsed?.events || [];
+
+    for (const item of items) {
+      if (!item) continue;
+
+      const summary = item.summary || item.title || "Untitled";
+      const startStr = item.start?.dateTime || item.start?.date || item.start || "";
+      const endStr = item.end?.dateTime || item.end?.date || item.end || "";
+      const status = item.status || "confirmed";
+      const eventType = item.eventType || "default";
+
+      if (status === "cancelled") continue;
+
+      const event: CalendarEvent = { summary, start: startStr, end: endStr, status, eventType };
+      upcoming.push(event);
+
+      // Check if event is happening now
+      const startTime = new Date(startStr).getTime();
+      const endTime = new Date(endStr).getTime();
+      const nowMs = now.getTime();
+
+      if (startTime <= nowMs && endTime > nowMs) {
+        inMeeting = true;
+        currentMeeting = summary;
+      }
+
+      // Track minutes to next event
+      if (startTime > nowMs) {
+        const mins = Math.round((startTime - nowMs) / (60 * 1000));
+        if (minutesToNext === null || mins < minutesToNext) {
+          minutesToNext = mins;
+        }
+      }
+    }
+  } catch {
+    // If JSON parse fails, return empty — we tried
+    console.log("[Calendar] Could not parse response as JSON, treating as empty");
+  }
+
+  return { upcoming, inMeeting, currentMeeting, minutesToNext };
+}
+
+// ── Main Context Type ───────────────────────────────────────────────
 
 export interface OpenClawContext {
   type: "intervention_decision";
@@ -44,6 +225,7 @@ export interface OpenClawContext {
     };
     energy: string; // "normal" | "low" | "high"
   };
+  calendar: CalendarContext | null;
   agentState: {
     time: string;
     dayPart: string;
@@ -55,14 +237,16 @@ export interface OpenClawContext {
 }
 
 /**
- * Build compact context for OpenClaw decision-making
+ * Build compact context for OpenClaw decision-making.
+ * Calendar context must be pre-fetched and passed in.
  */
 export function buildOpenClawContext(
   state: AmbientAgentState,
   baseline: PersonalBaseline | null,
   interventionsToday: Intervention[],
   maxInterventionsPerDay: number,
-  timezoneOffset: number
+  timezoneOffset: number,
+  calendar: CalendarContext | null = null
 ): OpenClawContext {
   // Calculate baseline deviations
   let hrDeviation: string | null = null;
@@ -157,6 +341,7 @@ export function buildOpenClawContext(
       },
       energy,
     },
+    calendar,
     agentState: {
       time,
       dayPart,

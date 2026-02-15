@@ -30,7 +30,8 @@ import {
 import { InterventionLogger, EnergyLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
-import { buildOpenClawContext } from "./openclaw-context";
+import { buildOpenClawContext, fetchCalendarContext } from "./openclaw-context";
+import type { CalendarContext } from "./openclaw-context";
 import {
   DEFAULT_CONFIG,
   type AmbientAgentConfig,
@@ -465,13 +466,13 @@ export class AmbientAgent {
     // Run all detectors to update state (always needed for status display)
     this.updateDetectorState();
 
-    // Check quiet hours - no interventions during sleep
-    if (isInQuietHours(this.config)) {
-      return;
-    }
-
-    // Check intervention limits (executor-side enforcement)
-    if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
+    // Code-side disqualifiers — deterministic checks that don't need LLM
+    const dq = this.checkDisqualifiers();
+    if (dq) {
+      this.log(`[DQ] ${dq}`);
+      // Still check flow mode exit and log energy even when disqualified
+      await this.checkFlowModeExit();
+      await this.logEnergyState();
       return;
     }
 
@@ -492,6 +493,68 @@ export class AmbientAgent {
 
     // Silent energy state logging (no intervention)
     await this.logEnergyState();
+  }
+
+  /**
+   * Code-side disqualifiers — deterministic boolean checks enforced before
+   * the model is called. These are the checks that models consistently fail
+   * on (eval showed 4/10 DQ misses across all models without this).
+   *
+   * Returns a reason string if disqualified, null if clear to proceed.
+   */
+  private checkDisqualifiers(): string | null {
+    // Watch disconnected
+    if (!this.state.isWatchConnected) {
+      return "Watch disconnected — go silent";
+    }
+
+    // No baseline established
+    if (!this.state.baseline) {
+      return "No baseline — can't make informed decisions";
+    }
+
+    // Quiet hours (night)
+    if (isInQuietHours(this.config)) {
+      return "Quiet hours — silence";
+    }
+
+    // Lunch break
+    const localHour = this.getLocalHour();
+    if (localHour >= 12 && localHour < 14) {
+      return "Lunch break — leave user alone";
+    }
+
+    // Daily intervention limit reached
+    if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
+      return "Daily intervention limit reached";
+    }
+
+    // Recent intervention (<2 hours ago)
+    if (this.state.interventionsToday.length > 0) {
+      const last = this.state.interventionsToday[this.state.interventionsToday.length - 1];
+      const hoursSinceLast = (Date.now() - last.triggeredAt) / (1000 * 60 * 60);
+      if (hoursSinceLast < 2) {
+        return `Last intervention ${hoursSinceLast.toFixed(1)}h ago — too recent`;
+      }
+    }
+
+    // Stress checkin already offered today
+    if (this.state.stressDetection.checkinOfferedToday && this.state.stressDetection.isElevated) {
+      return "Stress checkin already offered today";
+    }
+
+    // Reflection already offered today
+    if (this.state.eveningReflection.reflectionOfferedToday && this.state.eveningReflection.recoveryDetected) {
+      return "Reflection already offered today";
+    }
+
+    return null;
+  }
+
+  private getLocalHour(): number {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    return ((utcHour + this.config.quietHours.timezoneOffset) % 24 + 24) % 24;
   }
 
   /**
@@ -550,12 +613,30 @@ export class AmbientAgent {
   // ── OpenClaw Decision Path ─────────────────────────────────────
 
   private async processViaOpenClaw(): Promise<void> {
+    // Fetch calendar context (best-effort, cached 2min)
+    const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
+
+    // Calendar-based code-side disqualifiers
+    if (calendar?.inMeeting) {
+      this.log(`[DQ] In meeting: "${calendar.currentMeeting}" — suppressing`);
+      return;
+    }
+    if (calendar && calendar.minutesToNext !== null && calendar.minutesToNext < 5) {
+      this.log(`[DQ] Meeting in ${calendar.minutesToNext} min — suppressing`);
+      return;
+    }
+    if (calendar === null) {
+      this.log("[DQ] Calendar unavailable — being conservative");
+      return;
+    }
+
     const context = buildOpenClawContext(
       this.state,
       this.state.baseline,
       this.state.interventionsToday,
       this.config.maxInterventionsPerDay,
-      this.config.quietHours.timezoneOffset
+      this.config.quietHours.timezoneOffset,
+      calendar
     );
 
     const message = JSON.stringify(context);
@@ -570,12 +651,6 @@ export class AmbientAgent {
     // Idempotency check
     if (response.decisionId && this.executedDecisions.has(response.decisionId)) {
       this.log(`[OpenClaw] Skipping duplicate decision: ${response.decisionId}`);
-      return;
-    }
-
-    // Executor-side enforcement: check limits again
-    if (this.state.interventionsToday.length >= this.config.maxInterventionsPerDay) {
-      this.log(`[OpenClaw] Executor blocked: max interventions reached`);
       return;
     }
 

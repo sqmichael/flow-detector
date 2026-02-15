@@ -277,7 +277,7 @@ export const REFLECTION_PROMPTS = [
 ] as const;
 
 export const CHECKIN_SCRIPT =
-  "Hey. Just checking in. Want to walk and talk?";
+  "Hey — maybe step away for a few?";
 
 // ── OpenClaw Types ──────────────────────────────────────────────────
 

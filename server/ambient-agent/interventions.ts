@@ -262,42 +262,18 @@ function buildFlowMessage(context: Intervention["trigger"]["context"]): string {
 /**
  * Build sensor-contextual message for stress check-in
  */
-function buildCheckinMessage(context: Intervention["trigger"]["context"]): string {
-  const parts: string[] = [];
-
-  if (context.hr) {
-    parts.push(`HR ${context.hr}`);
-  }
-  if (context.hrv) {
-    parts.push(`HRV ${Math.round(context.hrv)}ms`);
-  }
-  if (context.scl) {
-    parts.push(`EDA ${context.scl.toFixed(1)}µS`);
-  }
-
-  if (parts.length > 0) {
-    return `Noticing some tension (${parts.join(", ")}). Walk and talk?`;
-  }
+function buildCheckinMessage(_context: Intervention["trigger"]["context"]): string {
+  // Copy Rules: never label emotions, cite biometrics, or prescribe actions.
+  // Keep messages vague, physical, brief.
   return CHECKIN_SCRIPT;
 }
 
 /**
  * Build sensor-contextual message for evening reflection
  */
-function buildReflectionMessage(context: Intervention["trigger"]["context"]): string {
-  const parts: string[] = [];
-
-  if (context.hrv) {
-    parts.push(`HRV ${Math.round(context.hrv)}ms`);
-  }
-  if (context.hr) {
-    parts.push(`HR ${context.hr}`);
-  }
-
-  if (parts.length > 0) {
-    return `Body settling down (${parts.join(", ")}). Good time to reflect.`;
-  }
-  return "Evening wind-down. Good time to reflect.";
+function buildReflectionMessage(_context: Intervention["trigger"]["context"]): string {
+  // Copy Rules: never cite biometrics to the user.
+  return "Good time to reflect.";
 }
 
 /**

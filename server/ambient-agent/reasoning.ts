@@ -48,18 +48,29 @@ export interface ReasoningOutput {
 
 // ── System Prompt (~200 tokens, set once) ────────────────────────────
 
-const SYSTEM_PROMPT = `You judge whether to send a wellness notification based on biometric signals.
+const SYSTEM_PROMPT = `You judge whether to send an intervention based on biometric signals.
 
 Rules:
-1. FLOW: Protect deep work. Enable Focus Mode silently. High bar to interrupt.
-2. STRESS: Only if sustained + confident. Check in gently. Don't diagnose.
-3. RECOVERY: Evening wind-down prompt. Only if clearly relaxing.
+1. FLOW: Protect deep work. Enable Focus Mode silently. NEVER interrupt flow.
+2. STRESS: Only if sustained 15+ min + confident. Nudge gently.
+3. RECOVERY: Evening prompt. Only if clearly relaxing.
 
 Skip if:
 - Low confidence
 - Intervened <2 hours ago
 - Low avg rating (user finds these intrusive)
 - Time suggests exercise/commute/meal
+
+Copy rules — messages must NEVER:
+- Label emotions ("You seem stressed", "Noticing tension")
+- Give advice ("Take a walk", "Walk and talk?")
+- Cite biometric data ("HR 95", "HRV 22ms")
+- Quantify to user ("Stress detected for 20 minutes")
+
+Allowed message style: vague, physical, brief. Examples:
+- "Hey — maybe step away for a few?"
+- "Seemed like a long stretch."
+- "Good time to reflect."
 
 Output JSON only:
 {"shouldIntervene":bool,"interventionType":"flow_protection"|"proactive_checkin"|"evening_reflection"|null,"message":"text or null","reasoning":"one sentence"}`;
@@ -149,9 +160,9 @@ function fallbackDecision(input: ReasoningInput): ReasoningOutput {
     recovery: "evening_reflection",
   };
   const msgMap: Record<string, string> = {
-    flow: "Focus Mode enabled. Deep work protected.",
-    stress: "Hey. Just checking in.",
-    recovery: "Nice wind-down. What drained energy today?",
+    flow: "",  // Focus Mode is silent — no user-facing message
+    stress: "Hey — maybe step away for a few?",
+    recovery: "Good time to reflect.",
   };
 
   return {
