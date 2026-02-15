@@ -40,7 +40,7 @@ function parseArgs(): RunConfig {
   const args = process.argv.slice(2);
   const config: RunConfig = {
     backend: "ollama",
-    model: "qwen32b-q6-16k",
+    model: "qwen3-32b-16k",
     soulPath: "/home/michael/flow-detector/.openclaw-workspace/SOUL.md",
     tag: "default",
     caseIds: null,
