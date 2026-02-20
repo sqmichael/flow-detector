@@ -277,10 +277,12 @@ fun UrlInputScreen(initialUrl: String, onConfirm: (String) -> Unit, onCancel: ()
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         result.data?.let { data ->
-            val remoteResults = androidx.wear.input.RemoteInput.getResultsFromIntent(data)
-            val typed = remoteResults?.getCharSequence("url_input")?.toString()
-            if (!typed.isNullOrBlank()) {
-                currentUrl = typed.trim()
+            val remoteResults = android.os.Bundle.EMPTY
+            android.app.RemoteInput.getResultsFromIntent(data)?.let { bundle ->
+                val typed = bundle.getCharSequence("url_input")?.toString()
+                if (!typed.isNullOrBlank()) {
+                    currentUrl = typed.trim()
+                }
             }
         }
     }
@@ -306,7 +308,7 @@ fun UrlInputScreen(initialUrl: String, onConfirm: (String) -> Unit, onCancel: ()
                 Chip(
                     onClick = {
                         val remoteInputs = listOf(
-                            androidx.wear.input.RemoteInput.Builder("url_input")
+                            android.app.RemoteInput.Builder("url_input")
                                 .setLabel("Server URL")
                                 .build()
                         )
