@@ -9,6 +9,7 @@ import {
   saveTheme,
   getThemes,
   getActiveThemes,
+  getRecentThemes,
   touchTheme,
   deleteTheme,
   findThemeByKeyword,
@@ -262,6 +263,55 @@ test("saveTheme deduplicates by theme name", () => {
   const themes = getThemes();
   assert(themes.length === 1, "Should have 1 theme (deduplicated)");
   assert(themes[0].context === "context 2", "Should update context");
+});
+
+// getRecentThemes tests
+test("getRecentThemes_activeThemes_returnsThemeNamesOrderedByRecency", () => {
+  cleanup();
+  const db = getDb();
+  const now = Date.now();
+  // Insert with explicit timestamps to guarantee ordering
+  db.prepare(
+    "INSERT INTO themes (id, theme, context, last_mentioned, expires, source) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run("t1", "sleep quality", "ctx", now - 3000, now + DECAY_PERIOD_MS, "call");
+  db.prepare(
+    "INSERT INTO themes (id, theme, context, last_mentioned, expires, source) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run("t2", "deadlines", "ctx", now - 2000, now + DECAY_PERIOD_MS, "call");
+  db.prepare(
+    "INSERT INTO themes (id, theme, context, last_mentioned, expires, source) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run("t3", "focus blocks", "ctx", now - 1000, now + DECAY_PERIOD_MS, "call");
+  const themes = getRecentThemes(10);
+  assert(themes.length === 3, "Should return all 3 active themes");
+  assert(themes[0] === "focus blocks", "Most recently mentioned should be first");
+  assert(typeof themes[0] === "string", "Should return strings");
+});
+
+test("getRecentThemes_withLimit_respectsLimit", () => {
+  cleanup();
+  saveTheme("theme a", "context");
+  saveTheme("theme b", "context");
+  saveTheme("theme c", "context");
+  const themes = getRecentThemes(2);
+  assert(themes.length === 2, "Should return at most 2 themes");
+});
+
+test("getRecentThemes_expiredThemes_skipsExpired", () => {
+  cleanup();
+  const db = getDb();
+  // Insert an expired theme directly
+  db.prepare(
+    "INSERT INTO themes (id, theme, context, last_mentioned, expires, source) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run("expired-id", "old expired theme", "ctx", 0, 1, "call");
+  saveTheme("fresh theme", "context"); // Not expired
+  const themes = getRecentThemes(10);
+  assert(themes.length === 1, "Should skip expired themes");
+  assert(themes[0] === "fresh theme", "Should return only the active theme");
+});
+
+test("getRecentThemes_empty_returnsEmptyArray", () => {
+  cleanup();
+  const themes = getRecentThemes(5);
+  assert(themes.length === 0, "Should return empty array when no themes");
 });
 
 // User state tests

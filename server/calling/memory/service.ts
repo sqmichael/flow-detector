@@ -89,6 +89,17 @@ export function getActiveThemes(): ThemeRecord[] {
     .all(now) as ThemeRecord[];
 }
 
+export function getRecentThemes(limit: number): string[] {
+  const db = getDb();
+  const now = Date.now();
+  const rows = db
+    .prepare(
+      "SELECT theme FROM themes WHERE expires > ? ORDER BY last_mentioned DESC LIMIT ?"
+    )
+    .all(now, limit) as { theme: string }[];
+  return rows.map((r) => r.theme);
+}
+
 export function touchTheme(id: string): void {
   const db = getDb();
   const now = Date.now();
