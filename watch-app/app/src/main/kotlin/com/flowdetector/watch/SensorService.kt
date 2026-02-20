@@ -16,6 +16,7 @@ import android.location.Location
 import android.os.Binder
 import android.os.IBinder
 import android.os.Looper
+import android.net.wifi.WifiManager
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -291,6 +292,7 @@ class SensorService : LifecycleService() {
 
     private val binder = LocalBinder()
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     inner class LocalBinder : Binder() {
         fun getService(): SensorService = this@SensorService
@@ -374,6 +376,13 @@ class SensorService : LifecycleService() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "FlowDetector::SensorStreaming"
         )
+
+        // WiFi lock prevents the radio from sleeping when screen is off
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        wifiLock = wifiManager.createWifiLock(
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+            "FlowDetector::WifiStreaming"
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -388,6 +397,7 @@ class SensorService : LifecycleService() {
             _connectionError.value = null
             @Suppress("WakelockTimeout")
             wakeLock?.acquire()
+            wifiLock?.acquire()
             webSocketManager.connect(serverUrl)
             initializeSdk()
         }
@@ -414,6 +424,7 @@ class SensorService : LifecycleService() {
         _connectionError.value = null
         @Suppress("WakelockTimeout")
         wakeLock?.acquire()
+        wifiLock?.acquire()
         startForeground(NOTIFICATION_ID, createNotification())
         webSocketManager.connect(serverUrl)
         initializeSdk()
@@ -428,6 +439,9 @@ class SensorService : LifecycleService() {
 
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
+        }
+        if (wifiLock?.isHeld == true) {
+            wifiLock?.release()
         }
 
         heartRateTracker?.unsetEventListener()
