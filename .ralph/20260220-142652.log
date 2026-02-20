@@ -743,3 +743,84 @@ Running flow-calculator tests...
 Running TypeScript type check...
 All gates passed.
 [14:47:15] Gate PASSED
+[14:47:15] Committed successfully
+[14:47:15] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[14:47:15] Task 10: Update `agent.ts` to call `buildDynamicContext()` before each intervention decision in both `processViaOpenClaw()` and the reasoning.ts fallback path. Pass context through to both.
+[14:47:15] Attempt 1/3
+[14:47:15] Launching claude --print (model: sonnet)...
+Done. Here's what changed:
+
+**`server/ambient-agent/agent.ts`** — 15 lines added, 6 removed:
+
+- Added imports: `buildDynamicContext` and `DynamicContext` from `./dynamic-context`
+- `processViaReasoning()` now fetches calendar context and builds a `DynamicContext` once per decision cycle before dispatching to the three sub-methods
+- `processFlowProtection()`, `processStressDetection()`, `processEveningReflection()` each accept an optional `DynamicContext` parameter and attach it to `reasoningInput.dynamicContext` before calling `decideIntervention()`
+
+The OpenClaw path was already fully wired — `buildOpenClawContext()` internally calls `buildDynamicContext()` and includes it in the context object. This commit closes the gap in the fallback path only. All tests pass, TypeScript compiles clean.
+[14:49:34] Running gate: bash .ralph/gate.sh
+Running flow-calculator tests...
+
+=== Flow Calculator Tests ===
+
+   Score: 73%
+✅ Flow state (low blinks, high gaze stability) scores high
+   Score: 62%
+✅ Baseline state (normal blinks, normal gaze) scores around 0.5
+   Score: 17%
+✅ Distracted state (high blinks, low gaze stability) scores low
+   2/min: 55%, 6/min: 60%
+✅ Extremely low blink rate (2/min) slightly lower than optimal (6/min)
+   With calibration: 71%, Without: 100%
+✅ Without calibration, uses fallback thresholds
+   Raw scores: [0.8, 0.3, 0.9, 0.2, 0.85] → Smoothed: 56%
+✅ EMA smoothing reduces volatility
+   After 1 min: inFlow=false, confidence=15%
+   After 2.5 min: inFlow=true, confidence=42%
+✅ Flow confirmation requires 2 minutes above threshold
+   After dropping: inFlow=false, smoothed=37%
+✅ Dropping below threshold resets flow onset
+   10.5 blinks/min (z=-1.5): 73%
+✅ Z-score math: 1.5 std below baseline gives high blink score
+   Scenario scores:
+     Optimal flow: 89%
+     Deep focus (slight strain): 60%
+     Normal work: 62%
+     Tired: 28%
+     Very distracted: 18%
+✅ Score ranges across different states
+   Optimal(40ms): 100%, Stressed(10ms): 4%, Drowsy(80ms): 0%
+✅ HRV scoring: optimal RMSSD (z=-0.5) scores highest
+   With HRV: 90%, Eye-only: 87%
+✅ Combined flow with HRV produces different score than eye-only
+   Good(40ms): 0.8, OK(15ms): 0.6, Bad(5ms): 0.4
+✅ HRV scoring without baseline uses absolute thresholds
+   At baseline(5.0): 100%, High(9.5): 1%, Low(0.5): 1%
+✅ EDA scoring: at personal baseline (z=0) scores highest
+   Moderate(6.0): 0.8, Borderline(12.0): 0.6, Extreme(25.0): 0.4
+✅ EDA scoring: without baseline uses absolute thresholds
+   Eye+HRV+EDA: 91%, Eye+HRV: 90%, Eye-only: 87%
+✅ Three-tier weights: EDA changes combined score
+   With EDA: scl=7.5, Without: scl=null
+✅ Combined flow includes SCL value when EDA data provided
+   Very still(0.95): 100%, Moderate(0.6): 66%, Restless(0.2): 22%
+✅ Stillness scoring: high stillness scores higher
+   Perfect(1.0): 1.000, Over(1.2): 1.000
+✅ Stillness scoring: capped at 1.0
+   Still(1.0): 0.950, Mid(0.5): 0.725, Restless(0.0): 0.500
+✅ Motion quality: bounded between 0.5 and 0.95
+   High(0.9): 0.905, Mid(0.5): 0.725, Low(0.1): 0.545
+✅ Motion quality: lower stillness = lower multiplier
+   Eye+HRV+EDA+Stillness: 84%, Eye+HRV+EDA: 91%, Eye+HRV: 90%
+✅ Four-tier weights: stillness changes combined score
+   Very still: 86%, Restless: 42%, Difference: 44%
+✅ Restless movement significantly lowers flow score
+   Eye-only: 1, Eye+HRV: 0.9999999999999999, Eye+HRV+EDA: 1, Eye+HRV+EDA+Stillness: 1
+✅ Tier weights sum to 1.0
+   Three-tier (no stillness): 91%
+✅ Backward compatibility: null stillness uses three-tier
+
+=== All tests complete ===
+
+Running TypeScript type check...
+All gates passed.
+[14:49:35] Gate PASSED
