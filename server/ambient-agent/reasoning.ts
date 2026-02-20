@@ -9,6 +9,7 @@
  */
 
 import type { PersonalBaseline, Intervention, InterventionType } from "./types";
+import type { DynamicContext } from "./dynamic-context";
 
 // ── Config ───────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export interface ReasoningInput {
     recentAvgRating: number | null; // 1-5 scale
   };
   trend?: string; // e.g., "hr_rising_10min" (conditional)
+  dynamicContext?: DynamicContext;
 }
 
 export interface ReasoningOutput {
@@ -75,12 +77,68 @@ Allowed message style: vague, physical, brief. Examples:
 Output JSON only:
 {"shouldIntervene":bool,"interventionType":"flow_protection"|"proactive_checkin"|"evening_reflection"|null,"message":"text or null","reasoning":"one sentence"}`;
 
+// ── Context Serializer ────────────────────────────────────────────────
+
+/**
+ * Serialize a DynamicContext into a compact "Context:" block appended to the
+ * user prompt. Lines with null or "unknown" values are omitted to stay within
+ * the +80 token budget.
+ *
+ * Exported for unit testing.
+ */
+export function serializeDynamicContext(ctx: DynamicContext): string {
+  const lines: string[] = [];
+
+  // Sensor mood (skip "unknown")
+  if (ctx.sensorMood !== "unknown") {
+    lines.push(`- Mood: ${ctx.sensorMood}`);
+  }
+
+  // Time: "Thursday afternoon, 14:30"
+  lines.push(`- Time: ${ctx.dayOfWeek} ${ctx.timeOfDay}`);
+
+  // Warmth (only if > 0, level 0 is default/unknown relationship)
+  if (ctx.warmthLevel > 0) {
+    lines.push(`- Warmth: level ${ctx.warmthLevel}`);
+  }
+
+  // Themes (skip empty array)
+  if (ctx.recentThemes.length > 0) {
+    lines.push(`- Themes: ${ctx.recentThemes.join(", ")}`);
+  }
+
+  // Last intervention
+  if (
+    ctx.lastInterventionType !== null &&
+    ctx.lastInterventionHoursAgo !== null
+  ) {
+    const ratingPart =
+      ctx.lastInterventionRating !== null
+        ? `, rated ${ctx.lastInterventionRating}/5`
+        : "";
+    lines.push(
+      `- Last check-in: ${ctx.lastInterventionHoursAgo}h ago (${ctx.lastInterventionType}${ratingPart})`
+    );
+  }
+
+  // Next calendar event
+  if (ctx.nextEventMinutes !== null && ctx.nextEventName !== null) {
+    lines.push(`- Next event: "${ctx.nextEventName}" in ${ctx.nextEventMinutes}min`);
+  }
+
+  if (lines.length === 0) return "";
+
+  return "\n\nContext:\n" + lines.join("\n");
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 export async function decideIntervention(
   input: ReasoningInput
 ): Promise<ReasoningOutput> {
-  const userPrompt = JSON.stringify(input);
+  const { dynamicContext, ...inputWithoutContext } = input;
+  const contextBlock = dynamicContext ? serializeDynamicContext(dynamicContext) : "";
+  const userPrompt = JSON.stringify(inputWithoutContext) + contextBlock;
   console.log(`[Reasoning] Input: ${userPrompt}`);
   console.log(`[Reasoning] Using OpenRouter (${MODEL})`);
 
