@@ -143,6 +143,9 @@ export class AmbientAgent {
   // Track executed decision IDs for idempotency
   private executedDecisions: Set<string> = new Set();
 
+  // Timestamp of the last batch that included a location field (ms)
+  private lastLocationReceivedAt: number | null = null;
+
   constructor(config: Partial<AmbientAgentConfig> = {}, options?: { useOpenClaw?: boolean }) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.useOpenClaw = options?.useOpenClaw ?? this.config.openclaw.enabled;
@@ -375,6 +378,7 @@ export class AmbientAgent {
     } else {
       this.log("Watch disconnected");
       this.state.currentLocation = null;
+      this.lastLocationReceivedAt = null;
     }
   }
 
@@ -443,7 +447,22 @@ export class AmbientAgent {
     if (hasEDA) {
       this.state.currentSCL = msg.eda!.meanScl;
     }
-    this.state.currentLocation = msg.location ?? null;
+
+    // Location staleness: only update if present; null out if absent and >5min stale
+    if (msg.location) {
+      this.state.currentLocation = msg.location;
+      this.lastLocationReceivedAt = msg.timestamp;
+    } else if (this.lastLocationReceivedAt !== null) {
+      const LOCATION_STALE_MS = 5 * 60 * 1000; // 5 minutes
+      const ageMs = msg.timestamp - this.lastLocationReceivedAt;
+      if (ageMs > LOCATION_STALE_MS) {
+        this.state.currentLocation = null;
+        this.lastLocationReceivedAt = null;
+        this.log("[Location] Stale location cleared (no update for >5min)");
+      }
+      // else: location is recent enough — keep it
+    }
+    // else: never had a location — currentLocation stays null
   }
 
   // ── Processing Loop ─────────────────────────────────────────────
