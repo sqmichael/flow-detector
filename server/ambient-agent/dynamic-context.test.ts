@@ -337,17 +337,18 @@ test("buildDynamicContext_withCalendar_returnsNextEvent", () => {
 });
 
 test("buildDynamicContext_correctDayOfWeek", () => {
-  // Use a fixed date: 2026-02-20 is a Friday
-  const friday = new Date(2026, 1, 20, 14, 0, 0); // Feb 20, 2026, 2pm
+  // Use a fixed UTC date: 2026-02-20T06:00Z = 14:00 UTC+8 (Friday afternoon)
+  const friday = new Date(Date.UTC(2026, 1, 20, 6, 0, 0));
   const state = makeState();
-  const ctx = buildDynamicContext(state, makeBaseline(), null, friday);
+  const ctx = buildDynamicContext(state, makeBaseline(), null, friday, 8);
   assertEqual(ctx.dayOfWeek, "Friday");
   assertEqual(ctx.timeOfDay, "afternoon");
 });
 
 test("buildDynamicContext_correctTimeOfDay_morning", () => {
-  const morning = new Date(2026, 1, 20, 9, 30, 0);
-  const ctx = buildDynamicContext(makeState(), makeBaseline(), null, morning);
+  // 2026-02-20T01:30Z = 09:30 UTC+8 (morning)
+  const morning = new Date(Date.UTC(2026, 1, 20, 1, 30, 0));
+  const ctx = buildDynamicContext(makeState(), makeBaseline(), null, morning, 8);
   assertEqual(ctx.timeOfDay, "morning");
 });
 

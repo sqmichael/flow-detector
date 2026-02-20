@@ -759,7 +759,7 @@ export class AmbientAgent {
 
     // Focus Time: treat as flow — enable Focus Mode, suppress interventions
     const focusEvent = calendar?.upcoming.find(
-      e => e.eventType === "focusTime" && isCurrentlyInEvent(e)
+      e => e.eventType === "focusTime" && isCurrentlyInEvent(e, undefined, this.config.quietHours.timezoneOffset)
     );
     if (focusEvent) {
       if (!this.state.flowProtection.inFlowMode) {
@@ -773,7 +773,7 @@ export class AmbientAgent {
 
     // Out of Office: suppress all interventions
     const oooEvent = calendar?.upcoming.find(
-      e => e.eventType === "outOfOffice" && isCurrentlyInEvent(e)
+      e => e.eventType === "outOfOffice" && isCurrentlyInEvent(e, undefined, this.config.quietHours.timezoneOffset)
     );
     if (oooEvent) {
       this.log(`[DQ] Out of Office: "${oooEvent.summary}" — suppressing`);
@@ -917,7 +917,7 @@ export class AmbientAgent {
 
     // Fetch calendar and build dynamic context once per decision cycle
     const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
-    const dynamicCtx = buildDynamicContext(this.state, this.state.baseline, calendar);
+    const dynamicCtx = buildDynamicContext(this.state, this.state.baseline, calendar, undefined, this.config.quietHours.timezoneOffset);
 
     await this.processFlowProtection(dynamicCtx);
     await this.processStressDetection(dynamicCtx);

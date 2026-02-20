@@ -214,16 +214,22 @@ export function buildDynamicContext(
   state: AmbientAgentState,
   baseline: PersonalBaseline | null,
   calendar: CalendarContext | null,
-  now: Date = new Date()
+  now: Date = new Date(),
+  timezoneOffset: number = 8
 ): DynamicContext {
-  // ── Time ──
-  const localHour = now.getHours();
+  // ── Time (use user's timezone, not server's) ──
+  const utcHour = now.getUTCHours();
+  const utcDay = now.getUTCDay();
+  const localHour = ((utcHour + timezoneOffset) % 24 + 24) % 24;
+  // Day rolls forward if offset pushes past midnight
+  const dayRollover = (utcHour + timezoneOffset >= 24) ? 1 : (utcHour + timezoneOffset < 0) ? -1 : 0;
+  const localDay = ((utcDay + dayRollover) % 7 + 7) % 7;
   const timeOfDay = deriveTimeOfDay(localHour);
   const DAY_NAMES = [
     "Sunday", "Monday", "Tuesday", "Wednesday",
     "Thursday", "Friday", "Saturday",
   ];
-  const dayOfWeek = DAY_NAMES[now.getDay()];
+  const dayOfWeek = DAY_NAMES[localDay];
 
   // ── Sensor mood ──
   const sensorMood = deriveSensorMood(state, baseline);

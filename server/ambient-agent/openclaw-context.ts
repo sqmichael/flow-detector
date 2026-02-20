@@ -147,11 +147,27 @@ export async function fetchCalendarContext(timezoneOffset: number): Promise<Cale
 
 /**
  * Returns true if `now` is within the event's start–end window.
- * Works for both all-day events (date strings) and timed events (ISO timestamps).
+ *
+ * All-day events use date-only strings (YYYY-MM-DD) which `new Date()` parses
+ * as UTC midnight. We detect this and adjust to local midnight using
+ * `timezoneOffset` so the event covers the correct local day.
  */
-export function isCurrentlyInEvent(event: CalendarEvent, now: Date = new Date()): boolean {
-  const startTime = new Date(event.start).getTime();
-  const endTime = new Date(event.end).getTime();
+export function isCurrentlyInEvent(
+  event: CalendarEvent,
+  now: Date = new Date(),
+  timezoneOffset: number = 8
+): boolean {
+  const isAllDayDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const offsetMs = timezoneOffset * 60 * 60 * 1000;
+
+  // All-day events: shift from UTC midnight to local midnight
+  const startTime = isAllDayDate(event.start)
+    ? new Date(event.start).getTime() - offsetMs
+    : new Date(event.start).getTime();
+  const endTime = isAllDayDate(event.end)
+    ? new Date(event.end).getTime() - offsetMs
+    : new Date(event.end).getTime();
+
   const nowMs = now.getTime();
   return startTime <= nowMs && endTime > nowMs;
 }
@@ -349,7 +365,7 @@ export function buildOpenClawContext(
   const uptimeMinutes = Math.round((Date.now() - state.startedAt) / (60 * 1000));
 
   // Dynamic context (sensor mood, memory themes, calendar proximity)
-  const dynamicContext = buildDynamicContext(state, baseline, calendar);
+  const dynamicContext = buildDynamicContext(state, baseline, calendar, undefined, timezoneOffset);
 
   return {
     type: "intervention_decision",
