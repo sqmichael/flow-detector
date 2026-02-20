@@ -1,8 +1,14 @@
 /**
- * Tests for isCurrentlyInEvent helper
+ * Tests for isCurrentlyInEvent helper and buildOpenClawContext
  */
 
-import { isCurrentlyInEvent, type CalendarEvent } from "./openclaw-context";
+import {
+  isCurrentlyInEvent,
+  buildOpenClawContext,
+  type CalendarEvent,
+  type CalendarContext,
+} from "./openclaw-context";
+import type { AmbientAgentState, PersonalBaseline } from "./types";
 
 let passed = 0;
 let failed = 0;
@@ -97,6 +103,106 @@ test("works with focusTime eventType", () => {
 test("works with outOfOffice eventType", () => {
   const event = makeEvent(thirtyMinAgo, thirtyMinLater, "outOfOffice");
   assert(isCurrentlyInEvent(event, now), "outOfOffice event within window");
+});
+
+// ── buildOpenClawContext: dynamicContext integration ──────────────────
+
+const NOW_MS = Date.now();
+
+function makeBaseline(restingHR = 65, baselineHRV = 40): PersonalBaseline {
+  return { restingHR, baselineHRV, updatedAt: NOW_MS };
+}
+
+function makeState(overrides: Partial<AmbientAgentState> = {}): AmbientAgentState {
+  return {
+    isConnected: true,
+    isWatchConnected: true,
+    watchDeviceName: "Galaxy Watch 8",
+    currentHR: 65,
+    currentHRV: 40,
+    currentSCL: null,
+    currentLocation: null,
+    lastSensorUpdate: NOW_MS,
+    baseline: makeBaseline(),
+    flowProtection: {
+      inFlowMode: false,
+      flowModeStartedAt: null,
+      stableMinutes: 0,
+      lastHapticAt: null,
+      hapticsThisHour: 0,
+    },
+    stressDetection: {
+      isElevated: false,
+      elevationStartedAt: null,
+      elevatedMinutes: 0,
+      checkinOfferedToday: false,
+    },
+    eveningReflection: {
+      reflectionOfferedToday: false,
+      reflectionOfferedAt: null,
+      recoveryDetected: false,
+    },
+    interventionsToday: [],
+    startedAt: NOW_MS - 10 * 60 * 1000,
+    ...overrides,
+  };
+}
+
+console.log("\nbuildOpenClawContext dynamicContext");
+
+test("includes dynamicContext field in returned object", () => {
+  const ctx = buildOpenClawContext(makeState(), makeBaseline(), [], 2, 0, null);
+  assert("dynamicContext" in ctx, "dynamicContext field must be present");
+});
+
+test("dynamicContext has required shape fields", () => {
+  const ctx = buildOpenClawContext(makeState(), makeBaseline(), [], 2, 0, null);
+  const dc = ctx.dynamicContext;
+  assert("sensorMood" in dc, "sensorMood missing");
+  assert("timeOfDay" in dc, "timeOfDay missing");
+  assert("dayOfWeek" in dc, "dayOfWeek missing");
+  assert("warmthLevel" in dc, "warmthLevel missing");
+  assert("recentThemes" in dc, "recentThemes missing");
+  assert("location" in dc, "location missing");
+  assert(Array.isArray(dc.recentThemes), "recentThemes must be array");
+});
+
+test("dynamicContext.location is unavailable when state has no location", () => {
+  const ctx = buildOpenClawContext(makeState({ currentLocation: null }), makeBaseline(), [], 2, 0, null);
+  assert(ctx.dynamicContext.location === "unavailable", "should be unavailable with no location");
+});
+
+test("dynamicContext.location is available when state has location data", () => {
+  const state = makeState({
+    currentLocation: { latitude: 37.7749, longitude: -122.4194, accuracy: 10 },
+  });
+  const ctx = buildOpenClawContext(state, makeBaseline(), [], 2, 0, null);
+  assert(ctx.dynamicContext.location === "available", "should be available with location data");
+});
+
+test("dynamicContext.sensorMood is unknown when no baseline", () => {
+  const ctx = buildOpenClawContext(makeState(), null, [], 2, 0, null);
+  assert(ctx.dynamicContext.sensorMood === "unknown", "unknown without baseline");
+});
+
+test("dynamicContext calendar fields are null when no calendar passed", () => {
+  const ctx = buildOpenClawContext(makeState(), makeBaseline(), [], 2, 0, null);
+  assert(ctx.dynamicContext.nextEventMinutes === null, "nextEventMinutes should be null");
+  assert(ctx.dynamicContext.nextEventName === null, "nextEventName should be null");
+});
+
+test("dynamicContext.nextEventMinutes populated from calendar", () => {
+  const futureStart = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const futureEnd = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const calendar: CalendarContext = {
+    upcoming: [{ summary: "Standup", start: futureStart, end: futureEnd, status: "confirmed" }],
+    inMeeting: false,
+    currentMeeting: null,
+    minutesToNext: 30,
+  };
+  const ctx = buildOpenClawContext(makeState(), makeBaseline(), [], 2, 0, calendar);
+  assert(ctx.dynamicContext.nextEventMinutes === 30, "nextEventMinutes should be 30");
+  assert(ctx.dynamicContext.nextEventName === "Standup", "nextEventName should be Standup");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

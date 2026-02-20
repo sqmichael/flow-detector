@@ -16,6 +16,8 @@ import type {
   PersonalBaseline,
   Intervention,
 } from "./types";
+import type { DynamicContext } from "./dynamic-context";
+import { buildDynamicContext } from "./dynamic-context";
 import { getUserState, getWarmthDescription } from "../calling/memory";
 
 // ── Calendar Types ──────────────────────────────────────────────────
@@ -249,6 +251,7 @@ export interface OpenClawContext {
     energy: string; // "normal" | "low" | "high"
   };
   calendar: CalendarContext | null;
+  dynamicContext: DynamicContext;
   agentState: {
     time: string;
     dayPart: string;
@@ -345,6 +348,9 @@ export function buildOpenClawContext(
   // Agent uptime
   const uptimeMinutes = Math.round((Date.now() - state.startedAt) / (60 * 1000));
 
+  // Dynamic context (sensor mood, memory themes, calendar proximity)
+  const dynamicContext = buildDynamicContext(state, baseline, calendar);
+
   return {
     type: "intervention_decision",
     sensors: {
@@ -382,6 +388,7 @@ export function buildOpenClawContext(
       energy,
     },
     calendar,
+    dynamicContext,
     agentState: {
       time,
       dayPart,
