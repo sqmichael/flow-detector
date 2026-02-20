@@ -7,7 +7,7 @@
 
 - [x] Add `location_lat`, `location_lon`, `location_accuracy` columns to `watch_batches` table in `server/sensor-fusion/database.ts` (ALTER TABLE migration + CREATE TABLE update). Add matching fields to `WatchBatchRow` and `WatchBatchInsert` in `server/sensor-fusion/types.ts`. Verify with `npx tsc --noEmit`.
 - [x] Update `insertWatchBatch()` in `server/sensor-fusion/database.ts` to persist location fields. Update `watch-relay.ts` batch handler (~line 300) to pass `msg.location` through to `insertWatchBatch()`. Include location in `exportSessionAsJSONL()`.
-- [ ] In `agent.ts`, clear `state.currentLocation = null` when location data is stale (no batch with location for >5 minutes). Add staleness check in `handleBatch()` — if batch has no location field AND last location is >5min old, null it out.
+- [x] In `agent.ts`, clear `state.currentLocation = null` when location data is stale (no batch with location for >5 minutes). Add staleness check in `handleBatch()` — if batch has no location field AND last location is >5min old, null it out.
 
 ## Part 2: Calendar Event Types
 
