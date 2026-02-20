@@ -100,9 +100,9 @@ data class LocationAggregate(
 data class BatchMessage(
     val type: String = "batch",
     val windowMs: Long = 30000,
-    val hr: HrAggregate,
-    val hrv: HrvAggregate,
-    val eda: EdaAggregate,
+    val hr: HrAggregate? = null,
+    val hrv: HrvAggregate? = null,
+    val eda: EdaAggregate? = null,
     val ppg: PpgAggregate? = null,
     val accel: AccelAggregate? = null,
     val location: LocationAggregate? = null,

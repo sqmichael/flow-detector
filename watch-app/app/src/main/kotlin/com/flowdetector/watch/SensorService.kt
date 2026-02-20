@@ -154,34 +154,40 @@ class SensorService : LifecycleService() {
             )
         }
 
-        // Need at least some HR samples to send a batch
-        if (hrSamples.isEmpty()) {
-            Log.d(TAG, "Skipping empty batch")
+        // Need at least some meaningful sensor data to send a batch
+        if (hrSamples.isEmpty() && edaSamples.isEmpty() && ppgSamples.isEmpty()) {
+            Log.d(TAG, "Skipping empty batch (no HR, EDA, or PPG)")
             return
         }
 
-        // HR aggregates
-        val hrValues = hrSamples.map { it.bpm }
-        val hrAggregate = HrAggregate(
-            mean = hrValues.average().toFloat(),
-            min = hrValues.minOrNull() ?: 0,
-            max = hrValues.maxOrNull() ?: 0,
-            samples = hrValues.size
-        )
+        // HR aggregates (nullable — SDK delivers intermittently)
+        val hrAggregate = if (hrSamples.isNotEmpty()) {
+            val hrValues = hrSamples.map { it.bpm }
+            HrAggregate(
+                mean = hrValues.average().toFloat(),
+                min = hrValues.minOrNull() ?: 0,
+                max = hrValues.maxOrNull() ?: 0,
+                samples = hrValues.size
+            )
+        } else null
 
         // HRV from IBI (filter valid range 300-2000ms)
-        val validIbi = ibiSamples.map { it.ibi }.filter { it in 300..2000 }
-        val hrvAggregate = HrvAggregate(
-            rmssd = calculateRmssd(validIbi),
-            sdnn = calculateSdnn(validIbi)
-        )
+        val hrvAggregate = if (ibiSamples.isNotEmpty()) {
+            val validIbi = ibiSamples.map { it.ibi }.filter { it in 300..2000 }
+            HrvAggregate(
+                rmssd = calculateRmssd(validIbi),
+                sdnn = calculateSdnn(validIbi)
+            )
+        } else null
 
         // EDA aggregates
-        val sclValues = edaSamples.map { it.scl }
-        val edaAggregate = EdaAggregate(
-            meanScl = if (sclValues.isNotEmpty()) sclValues.average().toFloat() else 0f,
-            peakScl = sclValues.maxOrNull() ?: 0f
-        )
+        val edaAggregate = if (edaSamples.isNotEmpty()) {
+            val sclValues = edaSamples.map { it.scl }
+            EdaAggregate(
+                meanScl = sclValues.average().toFloat(),
+                peakScl = sclValues.maxOrNull() ?: 0f
+            )
+        } else null
 
         // PPG aggregates (optional - only if we have samples)
         val ppgAggregate = if (ppgSamples.isNotEmpty()) {
@@ -231,11 +237,13 @@ class SensorService : LifecycleService() {
         }
 
         val timestamp = System.currentTimeMillis()
+        val hrInfo = hrAggregate?.let { "HR=${it.mean.toInt()} (${it.samples})" } ?: "HR=none"
+        val hrvInfo = hrvAggregate?.let { "RMSSD=${it.rmssd.toInt()}ms" } ?: ""
+        val edaInfo = edaAggregate?.let { "SCL=${it.meanScl}" } ?: ""
         val ppgInfo = ppgAggregate?.let { " PPG=${it.samples}samples" } ?: ""
         val accelInfo = accelAggregate?.let { " Stillness=${(it.stillness * 100).toInt()}%" } ?: ""
         val locInfo = locationAggregate?.let { " Loc=present ±${it.accuracy.toInt()}m" } ?: ""
-        Log.i(TAG, "Saving batch: HR=${hrAggregate.mean.toInt()} (${hrAggregate.samples}), " +
-                "RMSSD=${hrvAggregate.rmssd.toInt()}ms, SCL=${edaAggregate.meanScl}$ppgInfo$accelInfo$locInfo")
+        Log.i(TAG, "Saving batch: $hrInfo, $hrvInfo, $edaInfo$ppgInfo$accelInfo$locInfo")
 
         // Send location-enriched batch via WebSocket if connected,
         // then save to Room (without location — transient context only)

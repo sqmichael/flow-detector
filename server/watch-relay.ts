@@ -298,9 +298,13 @@ function handleWatchConnection(ws: WebSocket) {
           `Watch identified: ${watchDeviceName} (protocol v${msg.protocolVersion || "?"}), sensors: ${((msg.sensors as string[]) || []).join(", ")}`
         );
       } else if (msg.type === "batch") {
+        const hr = msg.hr as Record<string, number> | null;
+        const hrv = msg.hrv as Record<string, number> | null;
+        const eda = msg.eda as Record<string, number> | null;
+        const hrInfo = hr ? `HR=${hr.mean?.toFixed?.(0) || "?"} (${hr.samples || 0} samples)` : "HR=none";
         log(
-          `Batch: HR=${(msg.hr as Record<string, number>)?.mean?.toFixed?.(0) || "?"} (${(msg.hr as Record<string, number>)?.samples || 0} samples), ` +
-            `HRV=${(msg.hrv as Record<string, number>)?.rmssd?.toFixed?.(1) || "?"}ms, SCL=${(msg.eda as Record<string, number>)?.meanScl?.toFixed?.(2) || "?"}µS`
+          `Batch: ${hrInfo}, ` +
+            `HRV=${hrv?.rmssd?.toFixed?.(1) || "?"}ms, SCL=${eda?.meanScl?.toFixed?.(2) || "?"}µS`
         );
 
         // Store watch batch in database

@@ -341,23 +341,23 @@ export interface BatchMessage {
   type: "batch";
   /** Window duration in ms (always 30000) */
   windowMs: number;
-  /** Heart rate aggregates */
-  hr: {
+  /** Heart rate aggregates (null when SDK doesn't deliver HR in this window) */
+  hr?: {
     mean: number;
     min: number;
     max: number;
     samples: number;
-  };
+  } | null;
   /** HRV metrics calculated on-watch from IBI data */
-  hrv: {
+  hrv?: {
     rmssd: number;
     sdnn: number;
-  };
+  } | null;
   /** EDA (skin conductance) aggregates */
-  eda: {
+  eda?: {
     meanScl: number;
     peakScl: number;
-  };
+  } | null;
   /** Location snapshot (optional, coarse GPS) */
   location?: {
     latitude: number;

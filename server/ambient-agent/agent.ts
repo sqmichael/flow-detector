@@ -11,6 +11,8 @@
  */
 
 import WebSocket from "ws";
+import { mkdirSync } from "fs";
+import { dirname } from "path";
 import { HRVCalculator } from "./hrv-calculator";
 import {
   detectFlowState,
@@ -30,7 +32,7 @@ import {
 import { InterventionLogger, EnergyLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
-import { buildOpenClawContext, fetchCalendarContext } from "./openclaw-context";
+import { buildOpenClawContext, fetchCalendarContext, type OpenClawContext } from "./openclaw-context";
 import type { CalendarContext } from "./openclaw-context";
 import {
   DEFAULT_CONFIG,
@@ -202,10 +204,39 @@ export class AmbientAgent {
     console.log(`[${time}] [Agent]`, ...args);
   }
 
+  /**
+   * Update the main agent's BIOMETRIC_CONTEXT.md file so it has access
+   * to the latest sensor data in its workspace context.
+   */
+  private updateMainAgentContext(context: OpenClawContext): void {
+    try {
+      const { spawnSync } = require("child_process");
+      const contextJson = JSON.stringify(context);
+      const result = spawnSync(
+        "python3",
+        ["/home/michael/.openclaw/workspace/scripts/update-biometric-context.py"],
+        {
+          input: contextJson,
+          encoding: "utf-8",
+          timeout: 5000,
+        }
+      );
+      if (result.status !== 0 && result.stderr) {
+        this.log(`[MainContext] Update failed: ${result.stderr}`);
+      }
+    } catch (err) {
+      // Non-critical — don't break the ambient agent if this fails
+      this.log(`[MainContext] Error: ${err}`);
+    }
+  }
+
   // ── Connection Management ───────────────────────────────────────
 
   async start(): Promise<void> {
     this.log("Starting agent...");
+
+    // Ensure data directory exists
+    mkdirSync(dirname(this.config.logPath), { recursive: true });
 
     // Load today's interventions from log
     const todayInterventions = await this.logger.getTodayInterventions();
@@ -380,35 +411,39 @@ export class AmbientAgent {
   }
 
   private handleBatch(msg: BatchMessage): void {
-    // Validate batch
-    if (msg.hr.samples === 0) return;
+    // Accept batch if it has any meaningful data
+    const hasHR = msg.hr && msg.hr.samples > 0;
+    const hasEDA = msg.eda && msg.eda.meanScl > 0;
+    const hasLocation = !!msg.location;
 
-    const locInfo = msg.location ? ", Loc=present" : "";
-    this.log(
-      `Batch: HR=${msg.hr.mean.toFixed(0)} (${msg.hr.samples} samples), ` +
-        `HRV=${msg.hrv.rmssd.toFixed(1)}ms, SCL=${msg.eda.meanScl.toFixed(2)}µS${locInfo}`
-    );
+    if (!hasHR && !hasEDA && !hasLocation) return;
+
+    const hrInfo = hasHR ? `HR=${msg.hr!.mean.toFixed(0)} (${msg.hr!.samples} samples)` : "HR=none";
+    const hrvInfo = msg.hrv ? `HRV=${msg.hrv.rmssd.toFixed(1)}ms` : "";
+    const edaInfo = hasEDA ? `SCL=${msg.eda!.meanScl.toFixed(2)}µS` : "";
+    const locInfo = hasLocation ? ", Loc=present" : "";
+    this.log(`Batch: ${hrInfo}, ${hrvInfo}, ${edaInfo}${locInfo}`);
 
     // Update current values from batch aggregates
-    this.state.currentHR = Math.round(msg.hr.mean);
-    this.state.currentHRV = msg.hrv.rmssd;
-    this.state.currentSCL = msg.eda.meanScl;
-    this.state.currentLocation = msg.location ?? null;
-    this.state.lastSensorUpdate = msg.timestamp;
-
-    // Add to HR history (single sample per batch representing the window)
-    this.hrHistory.push({ hr: Math.round(msg.hr.mean), timestamp: msg.timestamp });
-    if (this.hrHistory.length > HR_HISTORY_SIZE) {
-      this.hrHistory.shift();
+    if (hasHR) {
+      this.state.currentHR = Math.round(msg.hr!.mean);
+      this.hrHistory.push({ hr: Math.round(msg.hr!.mean), timestamp: msg.timestamp });
+      if (this.hrHistory.length > HR_HISTORY_SIZE) {
+        this.hrHistory.shift();
+      }
     }
-
-    // Add to HRV history (pre-calculated on watch)
-    if (msg.hrv.rmssd > 0) {
+    if (msg.hrv && msg.hrv.rmssd > 0) {
+      this.state.currentHRV = msg.hrv.rmssd;
       this.hrvHistory.push({ rmssd: msg.hrv.rmssd, timestamp: msg.timestamp });
       if (this.hrvHistory.length > HRV_HISTORY_SIZE) {
         this.hrvHistory.shift();
       }
     }
+    if (hasEDA) {
+      this.state.currentSCL = msg.eda!.meanScl;
+    }
+    this.state.currentLocation = msg.location ?? null;
+    this.state.lastSensorUpdate = msg.timestamp;
   }
 
   // ── Processing Loop ─────────────────────────────────────────────
@@ -417,38 +452,83 @@ export class AmbientAgent {
     // Process every 30 seconds (accommodates OpenClaw CLI latency)
     this.processingInterval = setInterval(() => {
       this.processDetection();
+      // Also update main agent context file if watch is connected
+      if (this.state.isWatchConnected) {
+        this.updateMainAgentContextPeriodic();
+      }
     }, 30000);
   }
 
-  // ── Heartbeat (Debug) ──────────────────────────────────────────────
-
-  private startHeartbeat(): void {
-    // Send initial heartbeat after 10 seconds
-    setTimeout(() => this.sendHeartbeat(), 10000);
-
-    // Then every 60 minutes
-    this.heartbeatInterval = setInterval(() => {
-      this.sendHeartbeat();
-    }, 60 * 60 * 1000);
+  /**
+   * Periodic context update for the main agent (lighter-weight, no calendar fetch).
+   */
+  private updateMainAgentContextPeriodic(): void {
+    const context = buildOpenClawContext(
+      this.state,
+      this.state.baseline,
+      this.state.interventionsToday,
+      this.config.maxInterventionsPerDay,
+      this.config.quietHours.timezoneOffset,
+      null  // No calendar for periodic updates
+    );
+    this.updateMainAgentContext(context);
   }
 
-  private async sendHeartbeat(): Promise<void> {
-    const hr = this.state.currentHR?.toFixed(0) ?? "---";
-    const hrv = this.state.currentHRV?.toFixed(0) ?? "---";
-    const scl = this.state.currentSCL?.toFixed(1) ?? "---";
+  // ── Heartbeat / Daily Summary ──────────────────────────────────────
 
-    const watchStatus = this.state.isWatchConnected ? "connected" : "disconnected";
-    const flowStatus = this.state.flowProtection.inFlowMode ? "IN FLOW" : `stable ${this.state.flowProtection.stableMinutes}m`;
-    const stressStatus = this.state.stressDetection.isElevated ? `ELEVATED ${this.state.stressDetection.elevatedMinutes}m` : "normal";
+  private startHeartbeat(): void {
+    // Send startup notification after 10 seconds
+    setTimeout(() => this.sendStartupPush(), 10000);
 
-    // Get warmth level from memory
-    const userState = getUserState();
-    const warmthDesc = getWarmthDescription(userState.warmth_level);
+    // Schedule daily summary at 9pm local time, then every 24h
+    this.scheduleDailySummary();
+  }
 
-    const message = `Watch: ${watchStatus} | HR: ${hr} | HRV: ${hrv}ms | Flow: ${flowStatus} | Stress: ${stressStatus} | Kai: ${warmthDesc}`;
+  private async sendStartupPush(): Promise<void> {
+    const watchStatus = this.state.isWatchConnected ? "connected" : "waiting";
+    const message = `Agent started. Watch: ${watchStatus}. Ready.`;
+    await sendPushNotification("Agent Online", message, "low");
+    this.log(`Startup push sent: ${message}`);
+  }
 
-    await sendPushNotification("Heartbeat", message, "low");
-    this.log(`Heartbeat sent: ${message}`);
+  private scheduleDailySummary(): void {
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+    const localHour = ((utcHour + this.config.quietHours.timezoneOffset) % 24 + 24) % 24;
+
+    // Calculate ms until 9pm local time (21:00)
+    let hoursUntil9pm = 21 - localHour;
+    if (hoursUntil9pm <= 0) hoursUntil9pm += 24;
+    const msUntil9pm = hoursUntil9pm * 60 * 60 * 1000
+      - now.getUTCMinutes() * 60 * 1000
+      - now.getUTCSeconds() * 1000;
+
+    setTimeout(async () => {
+      await this.sendDailySummaryPush();
+      // Then every 24 hours
+      this.heartbeatInterval = setInterval(() => {
+        this.sendDailySummaryPush();
+      }, 24 * 60 * 60 * 1000);
+    }, msUntil9pm);
+
+    const hours = Math.floor(msUntil9pm / (60 * 60 * 1000));
+    const mins = Math.floor((msUntil9pm % (60 * 60 * 1000)) / (60 * 1000));
+    this.log(`Daily summary scheduled in ${hours}h ${mins}m (9pm local)`);
+  }
+
+  private async sendDailySummaryPush(): Promise<void> {
+    const interventionCount = this.state.interventionsToday.length;
+    const rated = this.state.interventionsToday.filter(i => i.rating).length;
+    const flowMinutes = this.state.flowProtection.stableMinutes;
+    const stressMinutes = this.state.stressDetection.elevatedMinutes;
+
+    const message = [
+      `Interventions: ${interventionCount} (${rated} rated)`,
+      `Flow: ${flowMinutes}m | Stress: ${stressMinutes}m`,
+    ].join("\n");
+
+    await sendPushNotification("Daily Summary", message, "low");
+    this.log(`Daily summary sent: ${interventionCount} interventions, ${rated} rated`);
   }
 
   private async processDetection(): Promise<void> {
@@ -640,6 +720,10 @@ export class AmbientAgent {
     );
 
     const message = JSON.stringify(context);
+
+    // Also update the main agent's biometric context file
+    this.updateMainAgentContext(context);
+
     const response = await queryOpenClaw(message, this.config.openclaw);
 
     this.log(`[OpenClaw] Response: ${response.reasoning}`);
