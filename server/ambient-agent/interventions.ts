@@ -21,7 +21,44 @@ const execAsync = promisify(exec);
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC || "flow-detector-x7k9m2";
 const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
-const RATING_SERVER = process.env.RATING_SERVER || "http://5.223.63.202:8767";
+
+/**
+ * Detect the best reachable URL for the rating server.
+ * Priority: tailscale IP → RATING_SERVER env → localhost fallback
+ */
+async function detectRatingServerUrl(): Promise<string> {
+  // 1. Try Tailscale IP (reachable from phone on same tailnet)
+  try {
+    const { stdout } = await execAsync("tailscale ip -4", { timeout: 3000 });
+    const ip = stdout.trim();
+    if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+      return `http://${ip}:8767`;
+    }
+  } catch {
+    // Tailscale not installed or not running
+  }
+
+  // 2. Environment variable
+  if (process.env.RATING_SERVER) {
+    return process.env.RATING_SERVER;
+  }
+
+  // 3. Localhost fallback (buttons won't work from phone)
+  return "http://localhost:8767";
+}
+
+let RATING_SERVER = "http://localhost:8767";
+
+// Initialize on module load — don't block, update when ready
+detectRatingServerUrl().then((url) => {
+  RATING_SERVER = url;
+  console.log(`[Interventions] Rating server URL: ${RATING_SERVER}`);
+});
+
+/** Get the detected rating server URL (for preflight display) */
+export function getRatingServerUrl(): string {
+  return RATING_SERVER;
+}
 
 /**
  * Send push notification via ntfy.sh

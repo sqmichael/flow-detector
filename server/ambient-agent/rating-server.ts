@@ -7,13 +7,22 @@
 
 import { createServer, IncomingMessage, ServerResponse } from "http";
 import { InterventionLogger } from "./logger";
+import { DEFAULT_CONFIG } from "./types";
 
 const PORT = 8767;
-const logger = new InterventionLogger("./intervention-log.jsonl");
 
 function log(...args: unknown[]) {
   const time = new Date().toLocaleTimeString();
   console.log(`[${time}] [Rating]`, ...args);
+}
+
+let ratingLogger: InterventionLogger | null = null;
+
+function getLogger(logPath?: string): InterventionLogger {
+  if (!ratingLogger) {
+    ratingLogger = new InterventionLogger(logPath || DEFAULT_CONFIG.logPath);
+  }
+  return ratingLogger;
 }
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -48,7 +57,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   const scores = ratingMap[rating];
 
   try {
-    const success = await logger.updateRating(id, {
+    const success = await getLogger().updateRating(id, {
       ...scores,
       wantAgainTomorrow: rating === "good",
     });
@@ -69,7 +78,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 });
 
-export function startRatingServer(): void {
+export function startRatingServer(logPath?: string): void {
+  if (logPath) {
+    ratingLogger = new InterventionLogger(logPath);
+  }
   server.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE") {
       log(`Port ${PORT} already in use - rating server skipped (another instance running)`);
