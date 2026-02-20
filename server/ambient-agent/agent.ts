@@ -27,12 +27,13 @@ import {
   executeIntervention,
   createIntervention,
   disableFocusMode,
+  enableFocusMode,
   sendPushNotification,
 } from "./interventions";
 import { InterventionLogger, EnergyLogger } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
-import { buildOpenClawContext, fetchCalendarContext, type OpenClawContext } from "./openclaw-context";
+import { buildOpenClawContext, fetchCalendarContext, isCurrentlyInEvent, type OpenClawContext } from "./openclaw-context";
 import type { CalendarContext } from "./openclaw-context";
 import { upsertCalendarEvents } from "../sensor-fusion/database";
 import {
@@ -753,6 +754,30 @@ export class AmbientAgent {
       this.log(`[DQ] Meeting in ${calendar.minutesToNext} min — suppressing`);
       return;
     }
+
+    // Focus Time: treat as flow — enable Focus Mode, suppress interventions
+    const focusEvent = calendar?.upcoming.find(
+      e => e.eventType === "focusTime" && isCurrentlyInEvent(e)
+    );
+    if (focusEvent) {
+      if (!this.state.flowProtection.inFlowMode) {
+        this.state.flowProtection.inFlowMode = true;
+        this.state.flowProtection.flowModeStartedAt = Date.now();
+        await enableFocusMode();
+      }
+      this.log(`[DQ] Calendar Focus Time: "${focusEvent.summary}" — protecting`);
+      return;
+    }
+
+    // Out of Office: suppress all interventions
+    const oooEvent = calendar?.upcoming.find(
+      e => e.eventType === "outOfOffice" && isCurrentlyInEvent(e)
+    );
+    if (oooEvent) {
+      this.log(`[DQ] Out of Office: "${oooEvent.summary}" — suppressing`);
+      return;
+    }
+
     if (calendar === null) {
       this.log("[DQ] Calendar unavailable — being conservative");
       return;

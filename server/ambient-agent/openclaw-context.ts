@@ -141,6 +141,19 @@ export async function fetchCalendarContext(timezoneOffset: number): Promise<Cale
   }
 }
 
+// ── Calendar Event Helpers ───────────────────────────────────────────
+
+/**
+ * Returns true if `now` is within the event's start–end window.
+ * Works for both all-day events (date strings) and timed events (ISO timestamps).
+ */
+export function isCurrentlyInEvent(event: CalendarEvent, now: Date = new Date()): boolean {
+  const startTime = new Date(event.start).getTime();
+  const endTime = new Date(event.end).getTime();
+  const nowMs = now.getTime();
+  return startTime <= nowMs && endTime > nowMs;
+}
+
 /**
  * Parse raw calendar response text into structured events.
  * Handles both JSON array and text-based formats from the MCP.
