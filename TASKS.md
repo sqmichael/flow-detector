@@ -23,7 +23,7 @@
 
 - [x] Integrate `DynamicContext` into `reasoning.ts` — add `dynamicContext?: DynamicContext` to `ReasoningInput`. In `decideIntervention()`, serialize context into a "Context:" block appended to the user prompt. Skip null/unknown lines. Keep under +80 tokens.
 - [x] Integrate `DynamicContext` into `openclaw-context.ts` — add dynamic context fields to `buildOpenClawContext()` return value so OpenClaw sees mood/time/memory/calendar signals.
-- [ ] Update `agent.ts` to call `buildDynamicContext()` before each intervention decision in both `processViaOpenClaw()` and the reasoning.ts fallback path. Pass context through to both.
+- [x] Update `agent.ts` to call `buildDynamicContext()` before each intervention decision in both `processViaOpenClaw()` and the reasoning.ts fallback path. Pass context through to both.
 
 ## Part 5: Verification
 
