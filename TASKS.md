@@ -11,7 +11,7 @@
 
 ## Part 2: Calendar Event Types
 
-- [ ] Add `isCurrentlyInEvent(event, now?)` helper to `server/ambient-agent/openclaw-context.ts` that returns true if `now` is between event start and end. Add `focusTime` and `outOfOffice` disqualifiers in `agent.ts` `processViaOpenClaw()` after the existing meeting check. `focusTime` should also call `enableFocusMode()`. Write inline tests or verify manually.
+- [x] Add `isCurrentlyInEvent(event, now?)` helper to `server/ambient-agent/openclaw-context.ts` that returns true if `now` is between event start and end. Add `focusTime` and `outOfOffice` disqualifiers in `agent.ts` `processViaOpenClaw()` after the existing meeting check. `focusTime` should also call `enableFocusMode()`. Write inline tests or verify manually.
 
 ## Part 3: Dynamic Context
 
