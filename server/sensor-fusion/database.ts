@@ -19,6 +19,8 @@ import type {
   EventInsert,
   FusedWindowRow,
   FusedWindowInsert,
+  CalendarEventRow,
+  CalendarEventInsert,
 } from "./types";
 
 const DB_PATH = path.join(__dirname, "..", "data", "sensor-fusion.db");
@@ -206,6 +208,25 @@ function createTables(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_fused_windows_session_time
       ON fused_windows(session_id, window_start);
+
+    -- Calendar events (persisted from Google Calendar)
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      event_uid TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      start_ts INTEGER NOT NULL,
+      end_ts INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'confirmed',
+      event_type TEXT,
+      is_all_day INTEGER NOT NULL DEFAULT 0,
+      raw_json TEXT,
+      fetched_at INTEGER NOT NULL,
+      UNIQUE(session_id, event_uid, start_ts)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_session_time
+      ON calendar_events(session_id, start_ts, end_ts);
   `);
 }
 
@@ -541,6 +562,92 @@ export function getFusedWindowsInRange(
   return stmt.all(sessionId, limit, offset) as FusedWindowRow[];
 }
 
+// ── Calendar Event Operations ───────────────────────────────────────
+
+/**
+ * Upsert calendar events — insert or update on conflict.
+ * Designed to be called after every fetchCalendarContext() cycle.
+ */
+export function upsertCalendarEvents(events: CalendarEventInsert[]): number {
+  const db = getDatabase();
+  const now = Date.now();
+
+  const stmt = db.prepare(`
+    INSERT INTO calendar_events (
+      session_id, event_uid, summary, start_ts, end_ts, status,
+      event_type, is_all_day, raw_json, fetched_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id, event_uid, start_ts) DO UPDATE SET
+      summary = excluded.summary,
+      end_ts = excluded.end_ts,
+      status = excluded.status,
+      event_type = excluded.event_type,
+      raw_json = excluded.raw_json,
+      fetched_at = excluded.fetched_at
+  `);
+
+  const upsertMany = db.transaction((rows: CalendarEventInsert[]) => {
+    let count = 0;
+    for (const e of rows) {
+      stmt.run(
+        e.session_id,
+        e.event_uid,
+        e.summary,
+        e.start_ts,
+        e.end_ts,
+        e.status,
+        e.event_type ?? null,
+        e.is_all_day ?? 0,
+        e.raw_json ?? null,
+        now
+      );
+      count++;
+    }
+    return count;
+  });
+
+  return upsertMany(events);
+}
+
+/**
+ * Get calendar events overlapping a time range.
+ * Uses interval overlap: event.start < rangeEnd AND event.end > rangeStart
+ */
+export function getCalendarEventsInRange(
+  sessionId: string,
+  rangeStart: number,
+  rangeEnd: number
+): CalendarEventRow[] {
+  const db = getDatabase();
+  const stmt = db.prepare(`
+    SELECT * FROM calendar_events
+    WHERE session_id = ?
+      AND status != 'cancelled'
+      AND start_ts < ?
+      AND end_ts > ?
+    ORDER BY start_ts
+  `);
+  return stmt.all(sessionId, rangeEnd, rangeStart) as CalendarEventRow[];
+}
+
+/**
+ * Get all calendar events for a session, optionally filtered by time.
+ */
+export function getCalendarEvents(
+  sessionId: string,
+  limit = 100
+): CalendarEventRow[] {
+  const db = getDatabase();
+  const stmt = db.prepare(`
+    SELECT * FROM calendar_events
+    WHERE session_id = ?
+      AND status != 'cancelled'
+    ORDER BY start_ts DESC
+    LIMIT ?
+  `);
+  return stmt.all(sessionId, limit) as CalendarEventRow[];
+}
+
 // ── Export Operations ───────────────────────────────────────────────
 
 export function exportSessionAsJSONL(sessionId: string): string {
@@ -586,6 +693,14 @@ export function exportSessionAsJSONL(sessionId: string): string {
     .all(sessionId) as FusedWindowRow[];
   for (const row of fusedWindows) {
     lines.push(JSON.stringify({ type: "fused_window", ...row }));
+  }
+
+  // Export calendar events
+  const calendarEvents = db
+    .prepare("SELECT * FROM calendar_events WHERE session_id = ? ORDER BY start_ts")
+    .all(sessionId) as CalendarEventRow[];
+  for (const row of calendarEvents) {
+    lines.push(JSON.stringify({ type: "calendar_event", ...row }));
   }
 
   return lines.join("\n");

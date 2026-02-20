@@ -189,6 +189,34 @@ export interface FusedWindowInsert {
   tier?: string;
 }
 
+// ── Calendar Events (persisted from Google Calendar) ────────────────
+
+export interface CalendarEventRow {
+  id: number;
+  session_id: string;
+  event_uid: string;       // Google Calendar event ID
+  summary: string;
+  start_ts: number;        // Unix ms (epoch)
+  end_ts: number;          // Unix ms (epoch)
+  status: string;          // "confirmed" | "tentative" | "cancelled"
+  event_type: string | null; // "default" | "focusTime" | "outOfOffice" | "workingLocation"
+  is_all_day: number;      // 0 or 1
+  raw_json: string | null; // Original event JSON for replay
+  fetched_at: number;      // Unix ms when we fetched this
+}
+
+export interface CalendarEventInsert {
+  session_id: string;
+  event_uid: string;
+  summary: string;
+  start_ts: number;
+  end_ts: number;
+  status: string;
+  event_type?: string | null;
+  is_all_day?: number;
+  raw_json?: string | null;
+}
+
 // ── API Request/Response Types ──────────────────────────────────────
 
 export interface CreateSessionRequest {

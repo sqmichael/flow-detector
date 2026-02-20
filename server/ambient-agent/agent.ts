@@ -34,6 +34,7 @@ import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
 import { buildOpenClawContext, fetchCalendarContext, type OpenClawContext } from "./openclaw-context";
 import type { CalendarContext } from "./openclaw-context";
+import { upsertCalendarEvents } from "../sensor-fusion/database";
 import {
   DEFAULT_CONFIG,
   type AmbientAgentConfig,
@@ -463,6 +464,34 @@ export class AmbientAgent {
    */
   private async updateMainAgentContextPeriodic(): Promise<void> {
     const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
+
+    // Persist calendar events to SQLite (async, best-effort)
+    if (calendar?.upcoming?.length) {
+      try {
+        const sessionId = this.state.sessionId || "ambient";
+        const inserts = calendar.upcoming
+          .filter(e => e.uid) // Only persist events with UIDs
+          .map(e => ({
+            session_id: sessionId,
+            event_uid: e.uid!,
+            summary: e.summary,
+            start_ts: new Date(e.start).getTime(),
+            end_ts: new Date(e.end).getTime(),
+            status: e.status,
+            event_type: e.eventType ?? null,
+            is_all_day: e.isAllDay ? 1 : 0,
+            raw_json: JSON.stringify(e),
+          }));
+        if (inserts.length > 0) {
+          const count = upsertCalendarEvents(inserts);
+          this.log(`[Calendar] Persisted ${count} events to SQLite`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(`[Calendar] Persist failed (non-fatal): ${msg}`);
+      }
+    }
+
     const context = buildOpenClawContext(
       this.state,
       this.state.baseline,

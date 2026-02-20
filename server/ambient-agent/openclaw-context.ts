@@ -26,6 +26,10 @@ export interface CalendarEvent {
   end: string;
   status: "confirmed" | "tentative" | "cancelled";
   eventType?: string;  // "default" | "focusTime" | "outOfOffice" | "workingLocation"
+  /** Google Calendar event ID (for persistence) */
+  uid?: string;
+  /** Whether this is an all-day event */
+  isAllDay?: boolean;
 }
 
 export interface CalendarContext {
@@ -160,10 +164,12 @@ function parseCalendarEvents(text: string, now: Date): CalendarContext {
       const endStr = item.end?.dateTime || item.end?.date || item.end || "";
       const status = item.status || "confirmed";
       const eventType = item.eventType || "default";
+      const uid = item.id || item.uid || item.eventId || "";
+      const isAllDay = !!(item.start?.date && !item.start?.dateTime);
 
       if (status === "cancelled") continue;
 
-      const event: CalendarEvent = { summary, start: startStr, end: endStr, status, eventType };
+      const event: CalendarEvent = { summary, start: startStr, end: endStr, status, eventType, uid, isAllDay };
       upcoming.push(event);
 
       // Check if event is happening now
