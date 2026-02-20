@@ -1,0 +1,1 @@
+{"timestamp":1771167141966,"date":"2026-02-15","intervention":{"id":"int_1771167141966_1","type":"proactive_checkin","triggeredAt":1771167141966,"trigger":{"reason":"Noticing some tension. Maybe take a short walk or stretch?","context":{"hr":94,"hrv":30.31314466686428}}},"condition":"sensor_triggered"}
