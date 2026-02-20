@@ -169,6 +169,7 @@ function storeWatchBatch(msg: {
   hr?: { mean?: number; min?: number; max?: number; samples?: number };
   hrv?: { rmssd?: number; sdnn?: number; samples?: number };
   eda?: { meanScl?: number; minScl?: number; maxScl?: number; samples?: number };
+  location?: { latitude: number; longitude: number; accuracy: number };
 }): void {
   if (!activeSessionId) {
     logVerbose("No active session, skipping watch batch storage");
@@ -191,6 +192,9 @@ function storeWatchBatch(msg: {
       eda_min_scl: msg.eda?.minScl ?? null,
       eda_max_scl: msg.eda?.maxScl ?? null,
       eda_samples: msg.eda?.samples ?? 0,
+      location_lat: msg.location?.latitude ?? null,
+      location_lon: msg.location?.longitude ?? null,
+      location_accuracy: msg.location?.accuracy ?? null,
     });
 
     // Trigger fusion after storing watch batch
