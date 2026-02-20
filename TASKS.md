@@ -17,7 +17,7 @@
 
 - [x] Add `getRecentThemes(limit: number): string[]` to `server/calling/memory/service.ts` — query themes table ordered by `created_at DESC`, respecting decay (skip themes with weight < 0.1). Write a test for it in `service.test.ts`.
 - [x] Create `server/ambient-agent/dynamic-context.ts` with `DynamicContext` interface and `buildDynamicContext(state, baseline, calendar)` function. Implement `sensorMood` derivation (5 states based on HR/HRV/stillness vs baseline). Read warmth from `getUserState()`, themes from `getRecentThemes(3)`. All reads wrapped in try/catch with safe defaults.
-- [ ] Write tests for `buildDynamicContext()` in `server/ambient-agent/dynamic-context.test.ts`: all 5 mood states, missing sensor data → "unknown", missing memory layer → defaults, calendar context present/absent, location available/unavailable.
+- [x] Write tests for `buildDynamicContext()` in `server/ambient-agent/dynamic-context.test.ts`: all 5 mood states, missing sensor data → "unknown", missing memory layer → defaults, calendar context present/absent, location available/unavailable.
 
 ## Part 4: Prompt Injection
 
