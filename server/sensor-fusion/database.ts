@@ -98,6 +98,16 @@ function runMigrations(db: Database.Database): void {
     console.log("[DB] Migration: Added accelerometer columns to watch_batches");
   }
 
+  // Migration: Add location columns to watch_batches
+  if (!columnExists(db, "watch_batches", "location_lat")) {
+    db.exec(`
+      ALTER TABLE watch_batches ADD COLUMN location_lat REAL;
+      ALTER TABLE watch_batches ADD COLUMN location_lon REAL;
+      ALTER TABLE watch_batches ADD COLUMN location_accuracy REAL;
+    `);
+    console.log("[DB] Migration: Added location columns to watch_batches");
+  }
+
   // Migration: Add stillness/motion columns to fused_windows
   if (!columnExists(db, "fused_windows", "watch_accel_stillness")) {
     db.exec(`
@@ -342,8 +352,9 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
       hrv_rmssd, hrv_sdnn, hrv_samples, eda_mean_scl, eda_min_scl, eda_max_scl,
       eda_samples, ppg_green_mean, ppg_green_std, ppg_ir_mean, ppg_ir_std,
       ppg_red_mean, ppg_red_std, ppg_samples, accel_magnitude_mean,
-      accel_magnitude_std, accel_stillness, accel_samples, quality, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      accel_magnitude_std, accel_stillness, accel_samples,
+      location_lat, location_lon, location_accuracy, quality, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -372,6 +383,9 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     data.accel_magnitude_std ?? null,
     data.accel_stillness ?? null,
     data.accel_samples ?? 0,
+    data.location_lat ?? null,
+    data.location_lon ?? null,
+    data.location_accuracy ?? null,
     quality,
     now
   );
@@ -403,6 +417,9 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     accel_magnitude_std: data.accel_magnitude_std ?? null,
     accel_stillness: data.accel_stillness ?? null,
     accel_samples: data.accel_samples ?? 0,
+    location_lat: data.location_lat ?? null,
+    location_lon: data.location_lon ?? null,
+    location_accuracy: data.location_accuracy ?? null,
     quality,
     created_at: now,
   };

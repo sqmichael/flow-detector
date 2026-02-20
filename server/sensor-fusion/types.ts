@@ -79,6 +79,10 @@ export interface WatchBatchRow {
   accel_magnitude_std: number | null;
   accel_stillness: number | null; // 0-1, higher = more still
   accel_samples: number;
+  // Location (from watch GPS, if available)
+  location_lat: number | null;
+  location_lon: number | null;
+  location_accuracy: number | null;
   quality: number; // 0-1, based on sample counts
   created_at: number;
 }
@@ -111,6 +115,10 @@ export interface WatchBatchInsert {
   accel_magnitude_std?: number | null;
   accel_stillness?: number | null;
   accel_samples?: number;
+  // Location fields (optional)
+  location_lat?: number | null;
+  location_lon?: number | null;
+  location_accuracy?: number | null;
   quality?: number;
 }
 
