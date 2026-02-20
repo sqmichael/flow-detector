@@ -411,12 +411,12 @@ export class AmbientAgent {
   }
 
   private handleBatch(msg: BatchMessage): void {
-    // Accept batch if it has any meaningful data
     const hasHR = msg.hr && msg.hr.samples > 0;
     const hasEDA = msg.eda && msg.eda.meanScl > 0;
     const hasLocation = !!msg.location;
 
-    if (!hasHR && !hasEDA && !hasLocation) return;
+    // Always update timestamp — watch is alive even if HR is between bursts
+    this.state.lastSensorUpdate = msg.timestamp;
 
     const hrInfo = hasHR ? `HR=${msg.hr!.mean.toFixed(0)} (${msg.hr!.samples} samples)` : "HR=none";
     const hrvInfo = msg.hrv ? `HRV=${msg.hrv.rmssd.toFixed(1)}ms` : "";
@@ -424,7 +424,7 @@ export class AmbientAgent {
     const locInfo = hasLocation ? ", Loc=present" : "";
     this.log(`Batch: ${hrInfo}, ${hrvInfo}, ${edaInfo}${locInfo}`);
 
-    // Update current values from batch aggregates
+    // Update sensor values from batch aggregates
     if (hasHR) {
       this.state.currentHR = Math.round(msg.hr!.mean);
       this.hrHistory.push({ hr: Math.round(msg.hr!.mean), timestamp: msg.timestamp });
@@ -443,7 +443,6 @@ export class AmbientAgent {
       this.state.currentSCL = msg.eda!.meanScl;
     }
     this.state.currentLocation = msg.location ?? null;
-    this.state.lastSensorUpdate = msg.timestamp;
   }
 
   // ── Processing Loop ─────────────────────────────────────────────
