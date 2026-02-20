@@ -202,6 +202,8 @@ export interface OpenClawContext {
     scl: number | null;
     watchConnected: boolean;
     location?: { latitude: number; longitude: number; accuracy: number };
+    /** Seconds since last sensor update (data freshness) */
+    dataAgeSec: number | null;
   };
   baseline: {
     restingHR: number;
@@ -213,6 +215,8 @@ export interface OpenClawContext {
     flow: {
       inFlowMode: boolean;
       stableMinutes: number;
+      /** Minutes in flow mode (null if not in flow) */
+      flowDurationMinutes: number | null;
     };
     stress: {
       isElevated: boolean;
@@ -233,6 +237,8 @@ export interface OpenClawContext {
     maxInterventions: number;
     lastInterventionHoursAgo: number | null;
     warmthLevel: string;
+    /** Minutes since agent started */
+    uptimeMinutes: number;
   };
 }
 
@@ -307,6 +313,19 @@ export function buildOpenClawContext(
     }
   }
 
+  // Data freshness — how old is the last sensor reading
+  const dataAgeSec = state.lastSensorUpdate
+    ? Math.round((Date.now() - state.lastSensorUpdate) / 1000)
+    : null;
+
+  // Flow duration — how long has flow mode been active
+  const flowDurationMinutes = state.flowProtection.flowModeStartedAt
+    ? Math.round((Date.now() - state.flowProtection.flowModeStartedAt) / (60 * 1000))
+    : null;
+
+  // Agent uptime
+  const uptimeMinutes = Math.round((Date.now() - state.startedAt) / (60 * 1000));
+
   return {
     type: "intervention_decision",
     sensors: {
@@ -315,6 +334,7 @@ export function buildOpenClawContext(
       scl: state.currentSCL !== null ? Math.round(state.currentSCL * 100) / 100 : null,
       watchConnected: state.isWatchConnected,
       ...(state.currentLocation ? { location: state.currentLocation } : {}),
+      dataAgeSec,
     },
     baseline: baseline
       ? {
@@ -328,6 +348,7 @@ export function buildOpenClawContext(
       flow: {
         inFlowMode: state.flowProtection.inFlowMode,
         stableMinutes: state.flowProtection.stableMinutes,
+        flowDurationMinutes,
       },
       stress: {
         isElevated: state.stressDetection.isElevated,
@@ -349,6 +370,7 @@ export function buildOpenClawContext(
       maxInterventions: maxInterventionsPerDay,
       lastInterventionHoursAgo,
       warmthLevel: warmthDesc,
+      uptimeMinutes,
     },
   };
 }

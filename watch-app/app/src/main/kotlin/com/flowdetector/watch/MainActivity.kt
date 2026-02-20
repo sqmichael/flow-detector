@@ -34,6 +34,7 @@ import androidx.wear.compose.material.*
 private const val TAG = "[WatchUI]"
 private const val PREFS_NAME = "flow_prefs"
 private const val KEY_SERVER_IP = "server_ip"
+private const val KEY_INPUT_MODE = "input_mode"
 private const val DEFAULT_IP = "5.223.63.202"
 
 class MainActivity : ComponentActivity() {
@@ -128,8 +129,12 @@ fun FlowDetectorWatchApp(
     onStartStreaming: (String) -> Unit,
     onStopStreaming: () -> Unit
 ) {
-    var ipAddress by remember {
+    var serverAddress by remember {
         mutableStateOf(prefs.getString(KEY_SERVER_IP, DEFAULT_IP) ?: DEFAULT_IP)
+    }
+    // "ip" for numeric keypad, "url" for full text input
+    var inputMode by remember {
+        mutableStateOf(prefs.getString(KEY_INPUT_MODE, "ip") ?: "ip")
     }
     var sensorPermissionGranted by remember { mutableStateOf(false) }
     var showIpInput by remember { mutableStateOf(false) }
@@ -176,23 +181,44 @@ fun FlowDetectorWatchApp(
             )
         }
         else if (showIpInput) {
-            IpInputScreen(
-                initialIp = ipAddress,
-                onConfirm = { newIp ->
-                    if (isValidIp(newIp)) {
-                        ipAddress = newIp
-                        prefs.edit().putString(KEY_SERVER_IP, newIp).apply()
+            if (inputMode == "url") {
+                UrlInputScreen(
+                    initialUrl = serverAddress,
+                    onConfirm = { newUrl ->
+                        serverAddress = newUrl
+                        prefs.edit().putString(KEY_SERVER_IP, newUrl).apply()
                         showIpInput = false
+                    },
+                    onCancel = { showIpInput = false },
+                    onSwitchToIp = {
+                        inputMode = "ip"
+                        prefs.edit().putString(KEY_INPUT_MODE, "ip").apply()
                     }
-                },
-                onCancel = { showIpInput = false }
-            )
+                )
+            } else {
+                IpInputScreen(
+                    initialIp = serverAddress,
+                    onConfirm = { newIp ->
+                        if (isValidIp(newIp)) {
+                            serverAddress = newIp
+                            prefs.edit().putString(KEY_SERVER_IP, newIp).apply()
+                            showIpInput = false
+                        }
+                    },
+                    onCancel = { showIpInput = false },
+                    onSwitchToUrl = {
+                        inputMode = "url"
+                        prefs.edit().putString(KEY_INPUT_MODE, "url").apply()
+                    }
+                )
+            }
         }
         else {
             MainContent(
                 service = service,
-                ipAddress = ipAddress,
-                onEditIp = { showIpInput = true },
+                serverAddress = serverAddress,
+                isUrlMode = inputMode == "url",
+                onEditAddress = { showIpInput = true },
                 onStartStreaming = onStartStreaming,
                 onStopStreaming = onStopStreaming
             )
@@ -220,8 +246,8 @@ fun PermissionRationale(onRequestPermission: () -> Unit, onOpenSettings: () -> U
 }
 
 @Composable
-fun IpInputScreen(initialIp: String, onConfirm: (String) -> Unit, onCancel: () -> Unit) {
-    var currentIp by remember { mutableStateOf(initialIp) }
+fun IpInputScreen(initialIp: String, onConfirm: (String) -> Unit, onCancel: () -> Unit, onSwitchToUrl: () -> Unit) {
+    var currentIp by remember { mutableStateOf(if (isValidIp(initialIp)) initialIp else "") }
 
     Scaffold(timeText = { TimeText() }, vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) }) {
         ScalingLazyColumn(
@@ -236,6 +262,83 @@ fun IpInputScreen(initialIp: String, onConfirm: (String) -> Unit, onCancel: () -
             item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton("7") { currentIp += "7" }; NumberButton("8") { currentIp += "8" }; NumberButton("9") { currentIp += "9" } } }
             item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { NumberButton(".") { if (!currentIp.endsWith(".")) currentIp += "." }; NumberButton("0") { currentIp += "0" }; Button(onClick = { if (currentIp.isNotEmpty()) currentIp = currentIp.dropLast(1) }, modifier = Modifier.size(48.dp)) { Text("<-") } } }
             item { Row(modifier = Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { Button(onClick = onCancel, colors = ButtonDefaults.secondaryButtonColors(), modifier = Modifier.size(48.dp)) { Text("X") }; Spacer(Modifier.width(16.dp)); Button(onClick = { onConfirm(currentIp) }, enabled = isValidIp(currentIp), modifier = Modifier.size(48.dp)) { Text("OK") } } }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { CompactChip(onClick = onSwitchToUrl, label = { Text("Use URL") }, colors = ChipDefaults.secondaryChipColors()) }
+        }
+    }
+}
+
+@Composable
+fun UrlInputScreen(initialUrl: String, onConfirm: (String) -> Unit, onCancel: () -> Unit, onSwitchToIp: () -> Unit) {
+    var currentUrl by remember { mutableStateOf(if (initialUrl.contains("://")) initialUrl else "") }
+
+    // Use Android's voice/keyboard input via RemoteInput
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        result.data?.let { data ->
+            val remoteResults = androidx.wear.input.RemoteInput.getResultsFromIntent(data)
+            val typed = remoteResults?.getCharSequence("url_input")?.toString()
+            if (!typed.isNullOrBlank()) {
+                currentUrl = typed.trim()
+            }
+        }
+    }
+
+    Scaffold(timeText = { TimeText() }, vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) }) {
+        ScalingLazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+            contentPadding = PaddingValues(top = 24.dp, bottom = 24.dp)
+        ) {
+            item {
+                Text(
+                    text = if (currentUrl.isBlank()) "No URL set" else currentUrl,
+                    style = MaterialTheme.typography.caption2,
+                    color = if (currentUrl.isBlank()) Color.Gray else Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item {
+                Chip(
+                    onClick = {
+                        val remoteInputs = listOf(
+                            androidx.wear.input.RemoteInput.Builder("url_input")
+                                .setLabel("Server URL")
+                                .build()
+                        )
+                        val intent = androidx.wear.input.RemoteInputIntentHelper
+                            .createActionRemoteInputIntent()
+                        androidx.wear.input.RemoteInputIntentHelper
+                            .putRemoteInputsExtra(intent, remoteInputs)
+                        launcher.launch(intent)
+                    },
+                    label = { Text("Type URL") },
+                    colors = ChipDefaults.primaryChipColors(),
+                    modifier = Modifier.fillMaxWidth(0.8f)
+                )
+            }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Button(onClick = onCancel, colors = ButtonDefaults.secondaryButtonColors(), modifier = Modifier.size(48.dp)) { Text("X") }
+                    Spacer(Modifier.width(16.dp))
+                    Button(
+                        onClick = { onConfirm(currentUrl) },
+                        enabled = isValidServerUrl(currentUrl),
+                        modifier = Modifier.size(48.dp)
+                    ) { Text("OK") }
+                }
+            }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { CompactChip(onClick = onSwitchToIp, label = { Text("Use IP") }, colors = ChipDefaults.secondaryChipColors()) }
         }
     }
 }
@@ -248,8 +351,9 @@ fun NumberButton(number: String, onClick: () -> Unit) {
 @Composable
 fun MainContent(
     service: SensorService?,
-    ipAddress: String,
-    onEditIp: () -> Unit,
+    serverAddress: String,
+    isUrlMode: Boolean,
+    onEditAddress: () -> Unit,
     onStartStreaming: (String) -> Unit,
     onStopStreaming: () -> Unit
 ) {
@@ -259,11 +363,27 @@ fun MainContent(
     val isStreaming by service?.isStreaming?.collectAsState() ?: remember { mutableStateOf(false) }
     val error by service?.connectionError?.collectAsState() ?: remember { mutableStateOf(null) }
     var isConnecting by remember { mutableStateOf(false) }
-    var ipError by remember { mutableStateOf<String?>(null) }
+    var addressError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isConnected, error) { if (isConnected || error != null) isConnecting = false }
 
     val listState = rememberScalingLazyListState()
+
+    // Build the WebSocket URL from the address
+    val wsUrl = if (isUrlMode) {
+        // URL mode: use as-is (user provides full wss://host/watch)
+        serverAddress
+    } else {
+        // IP mode: build ws://ip:8765/watch
+        "ws://$serverAddress:8765/watch"
+    }
+
+    val displayAddress = if (isUrlMode) {
+        // Show just the host part for URL mode
+        serverAddress.removePrefix("wss://").removePrefix("ws://").take(24)
+    } else {
+        serverAddress
+    }
 
     Scaffold(timeText = { TimeText() }, positionIndicator = { PositionIndicator(scalingLazyListState = listState) }) {
         ScalingLazyColumn(
@@ -278,30 +398,37 @@ fun MainContent(
             item { Spacer(modifier = Modifier.height(2.dp)) }
             item { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(text = currentScl?.let { String.format("%.2f", it) } ?: "--", style = MaterialTheme.typography.title2, color = Color(0xFF4FC3F7)); Text(text = "SCL (\u00B5S)", style = MaterialTheme.typography.caption1, color = Color.Gray) } }
             item { Spacer(modifier = Modifier.height(4.dp)) }
-            item { Text(text = ipAddress, style = MaterialTheme.typography.caption2, color = Color.Gray, textAlign = TextAlign.Center); Spacer(modifier = Modifier.height(4.dp)); CompactChip(onClick = onEditIp, label = { Text("Edit IP") }) }
+            item { Text(text = displayAddress, style = MaterialTheme.typography.caption2, color = Color.Gray, textAlign = TextAlign.Center); Spacer(modifier = Modifier.height(4.dp)); CompactChip(onClick = onEditAddress, label = { Text(if (isUrlMode) "Edit URL" else "Edit IP") }) }
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { 
+            item {
                 Button(
-                    onClick = { 
+                    onClick = {
                         if (isConnected || isStreaming) {
                             onStopStreaming()
                         } else {
-                            if (!isValidIp(ipAddress)) {
-                                ipError = "Invalid IP"
-                                return@Button
+                            if (isUrlMode) {
+                                if (!isValidServerUrl(serverAddress)) {
+                                    addressError = "Invalid URL"
+                                    return@Button
+                                }
+                            } else {
+                                if (!isValidIp(serverAddress)) {
+                                    addressError = "Invalid IP"
+                                    return@Button
+                                }
                             }
-                            ipError = null
+                            addressError = null
                             isConnecting = true
-                            onStartStreaming("ws://$ipAddress:8765/watch")
+                            onStartStreaming(wsUrl)
                         }
-                    }, 
-                    modifier = Modifier.fillMaxWidth(0.8f), 
+                    },
+                    modifier = Modifier.fillMaxWidth(0.8f),
                     enabled = !isConnecting
-                ) { 
-                    Text(if (isConnected || isStreaming) "Disconnect" else "Connect") 
+                ) {
+                    Text(if (isConnected || isStreaming) "Disconnect" else "Connect")
                 }
             }
-            val displayError = ipError ?: error
+            val displayError = addressError ?: error
             if (displayError != null) { item { Spacer(modifier = Modifier.height(4.dp)); Text(text = displayError, color = Color.Red, style = MaterialTheme.typography.caption2, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 16.dp)) } }
         }
     }
@@ -312,4 +439,8 @@ private fun isValidIp(ip: String): Boolean {
     val parts = ip.split('.')
     if (parts.size != 4) return false
     return parts.all { part -> if (part.isEmpty()) return@all false; part.toIntOrNull()?.let { it in 0..255 } ?: false }
+}
+
+private fun isValidServerUrl(url: String): Boolean {
+    return (url.startsWith("ws://") || url.startsWith("wss://")) && url.length > 10 && url.contains("/watch")
 }

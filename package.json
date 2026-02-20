@@ -12,7 +12,8 @@
     "agent:start": "npx tsx server/ambient-agent/cli.ts start",
     "agent:fixed": "npx tsx server/ambient-agent/cli.ts fixed",
     "agent:compare": "npx tsx server/ambient-agent/cli.ts compare",
-    "call-service": "npx tsx --env-file=server/calling/.env server/calling/call-service.ts"
+    "call-service": "npx tsx --env-file=server/calling/.env server/calling/call-service.ts",
+    "relay:public": "npx tsx server/watch-relay.ts & ngrok http 8765 --log stdout"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.18",

@@ -224,7 +224,7 @@ export interface AmbientAgentConfig {
 // ── Default Configuration ───────────────────────────────────────────
 
 export const DEFAULT_CONFIG: AmbientAgentConfig = {
-  relayUrl: "ws://localhost:8765/browser",
+  relayUrl: process.env.RELAY_URL || "ws://production-server:8765/browser",
 
   flowDetection: {
     stillnessMinutes: 30,
@@ -254,7 +254,7 @@ export const DEFAULT_CONFIG: AmbientAgentConfig = {
   },
 
   maxInterventionsPerDay: 2,
-  logPath: "./intervention-log.jsonl",
+  logPath: "./server/data/intervention-log.jsonl",
 
   openclaw: {
     enabled: true,
