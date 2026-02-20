@@ -27,4 +27,4 @@
 
 ## Part 5: Verification
 
-- [ ] End-to-end smoke test: run agent with `--no-openclaw`, send fake batch data via `test-e2e.ts`, verify dynamic context fields appear in intervention-log.jsonl trigger data. Verify location is persisted in SQLite. Verify `focusTime` calendar events suppress interventions.
+- [x] End-to-end smoke test: run agent with `--no-openclaw`, send fake batch data via `test-e2e.ts`, verify dynamic context fields appear in intervention-log.jsonl trigger data. Verify location is persisted in SQLite. Verify `focusTime` calendar events suppress interventions.
