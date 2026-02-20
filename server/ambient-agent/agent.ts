@@ -459,16 +459,17 @@ export class AmbientAgent {
   }
 
   /**
-   * Periodic context update for the main agent (lighter-weight, no calendar fetch).
+   * Periodic context update for the main agent (includes calendar).
    */
-  private updateMainAgentContextPeriodic(): void {
+  private async updateMainAgentContextPeriodic(): Promise<void> {
+    const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
     const context = buildOpenClawContext(
       this.state,
       this.state.baseline,
       this.state.interventionsToday,
       this.config.maxInterventionsPerDay,
       this.config.quietHours.timezoneOffset,
-      null  // No calendar for periodic updates
+      calendar
     );
     this.updateMainAgentContext(context);
   }
