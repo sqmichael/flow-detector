@@ -35,6 +35,8 @@ import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
 import { buildOpenClawContext, fetchCalendarContext, isCurrentlyInEvent, type OpenClawContext } from "./openclaw-context";
 import type { CalendarContext } from "./openclaw-context";
+import { buildDynamicContext } from "./dynamic-context";
+import type { DynamicContext } from "./dynamic-context";
 import { upsertCalendarEvents } from "../sensor-fusion/database";
 import {
   DEFAULT_CONFIG,
@@ -913,9 +915,13 @@ export class AmbientAgent {
   private async processViaReasoning(): Promise<void> {
     this.log("[Fallback] Using reasoning.ts for decision");
 
-    await this.processFlowProtection();
-    await this.processStressDetection();
-    await this.processEveningReflection();
+    // Fetch calendar and build dynamic context once per decision cycle
+    const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
+    const dynamicCtx = buildDynamicContext(this.state, this.state.baseline, calendar);
+
+    await this.processFlowProtection(dynamicCtx);
+    await this.processStressDetection(dynamicCtx);
+    await this.processEveningReflection(dynamicCtx);
   }
 
   /**
@@ -951,7 +957,7 @@ export class AmbientAgent {
 
   // ── Behavior A: Flow Protection (fallback path) ────────────────
 
-  private async processFlowProtection(): Promise<void> {
+  private async processFlowProtection(dynamicCtx?: DynamicContext): Promise<void> {
     const detection = detectFlowState(this.hrHistory, this.config.flowDetection);
 
     if (detection.shouldEnterFlowMode && !this.state.flowProtection.inFlowMode) {
@@ -963,6 +969,7 @@ export class AmbientAgent {
         this.state.interventionsToday,
         { stableMinutes: detection.stableMinutes }
       );
+      reasoningInput.dynamicContext = dynamicCtx;
 
       const decision = await decideIntervention(reasoningInput);
 
@@ -988,7 +995,7 @@ export class AmbientAgent {
 
   // ── Behavior B: Proactive Check-in (fallback path) ─────────────
 
-  private async processStressDetection(): Promise<void> {
+  private async processStressDetection(dynamicCtx?: DynamicContext): Promise<void> {
     if (this.state.stressDetection.checkinOfferedToday) return;
 
     const detection = detectStressPattern(
@@ -1008,6 +1015,7 @@ export class AmbientAgent {
         this.state.interventionsToday,
         { elevatedMinutes: detection.elevatedMinutes }
       );
+      reasoningInput.dynamicContext = dynamicCtx;
 
       const decision = await decideIntervention(reasoningInput);
 
@@ -1037,7 +1045,7 @@ export class AmbientAgent {
 
   // ── Behavior C: Evening Reflection (fallback path) ─────────────
 
-  private async processEveningReflection(): Promise<void> {
+  private async processEveningReflection(dynamicCtx?: DynamicContext): Promise<void> {
     const trigger = shouldTriggerEveningReflection(
       this.state.currentHR,
       this.state.currentHRV,
@@ -1055,6 +1063,7 @@ export class AmbientAgent {
         this.state.baseline,
         this.state.interventionsToday
       );
+      reasoningInput.dynamicContext = dynamicCtx;
 
       const decision = await decideIntervention(reasoningInput);
 
