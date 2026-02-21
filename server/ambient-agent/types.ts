@@ -90,6 +90,29 @@ export interface Intervention {
   };
 }
 
+// ── Connection State ─────────────────────────────────────────────────
+
+/**
+ * Explicit connection state for the watch relay.
+ * - "connected": watch is connected and data is flowing normally
+ * - "disconnected": watch is not connected, detection is paused
+ * - "warming_up": watch just reconnected, accumulating clean data before resuming detection
+ */
+export type ConnectionState = "connected" | "disconnected" | "warming_up";
+
+/**
+ * Gap event logged to JSONL when a disconnect/reconnect cycle completes.
+ * batchesDuringWarmup = 0 if the gap was debounced (< GAP_DEBOUNCE_MS).
+ */
+export interface GapEvent {
+  type: "gap";
+  disconnectedAt: number;
+  reconnectedAt: number;
+  gapDurationMs: number;
+  /** Number of batches received while in warming_up state */
+  batchesDuringWarmup: number;
+}
+
 // ── Agent State ─────────────────────────────────────────────────────
 
 /**
@@ -156,6 +179,15 @@ export interface AmbientAgentState {
   isConnected: boolean;
   isWatchConnected: boolean;
   watchDeviceName: string | null;
+
+  /** Watch connection state machine */
+  connectionState: ConnectionState;
+  /** Unix ms when the watch last disconnected (null if never disconnected) */
+  disconnectedAt: number | null;
+  /** Unix ms when the watch last reconnected (null if never reconnected) */
+  reconnectedAt: number | null;
+  /** Number of batches received since last reconnect (used for warm-up tracking) */
+  batchesSinceReconnect: number;
 
   /** Current sensor values */
   currentHR: number | null;
