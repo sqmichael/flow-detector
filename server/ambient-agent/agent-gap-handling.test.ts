@@ -5,19 +5,21 @@
  * - First connect: no warm-up
  * - Short gap (<5s): debounced, no warm-up
  * - Medium gap (5s–5min): warm-up, history preserved
- * - Long gap (>5min): warm-up, history cleared, baseline invalidated
+ * - Long gap (>5min): warm-up, history cleared, baseline preserved
  * - Warm-up completes after WARMUP_BATCHES (2) batches
  * - Detection blocked during warm-up
  * - Stale backfill batches (>1hr old) discarded
+ * - Baseline persistence (provisional/stable) works
  */
 
 import { AmbientAgent } from "./agent";
 import type { BatchMessage, AmbientAgentState } from "./types";
-import { readFileSync, unlinkSync, existsSync } from "fs";
+import { readFileSync, unlinkSync, existsSync, writeFileSync } from "fs";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
 const TEST_LOG_PATH = "/tmp/test-gap-handling.jsonl";
+const TEST_BASELINE_PATH = "/tmp/baseline-state.json";
 
 function makeBatch(overrides: Partial<BatchMessage> = {}): BatchMessage {
   return {
@@ -81,6 +83,7 @@ function readLogLines(): string[] {
 
 function cleanup(): void {
   if (existsSync(TEST_LOG_PATH)) unlinkSync(TEST_LOG_PATH);
+  if (existsSync(TEST_BASELINE_PATH)) unlinkSync(TEST_BASELINE_PATH);
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -182,8 +185,8 @@ test("test_mediumGap_warmupNoHistoryClear", () => {
   cleanup();
 });
 
-// 4. Long gap (>5min) — clears history and baseline
-test("test_longGap_clearsHistoryAndBaseline", () => {
+// 4. Long gap (>5min) — clears history but keeps baseline
+test("test_longGap_clearsHistory_keepsBaseline", () => {
   const agent = makeAgent();
 
   // First connect + add history
@@ -205,11 +208,59 @@ test("test_longGap_clearsHistoryAndBaseline", () => {
   assertEqual(state(agent).connectionState, "warming_up", "connectionState");
   assertEqual(hrHistory(agent).length, 0, "HR history cleared");
   assertEqual(hrvHistory(agent).length, 0, "HRV history cleared");
-  assertEqual(state(agent).baseline, null, "baseline invalidated");
+  assert(state(agent).baseline !== null, "baseline preserved");
 
   // Gap event logged
   const lines = readLogLines();
   assertEqual(lines.length, 1, "one gap event logged");
+  cleanup();
+});
+
+// 4b. Provisional baseline can be established with 10 HR samples
+test("test_provisionalBaseline_establishesAt10Samples", () => {
+  const agent = makeAgent();
+  callHandleWatchStatus(agent, true);
+
+  const now = Date.now();
+  for (let index = 0; index < 10; index++) {
+    callHandleBatch(agent, makeBatch({
+      timestamp: now - (9 - index) * 30000,
+      hr: { mean: 70 + (index % 2), min: 66, max: 76, samples: 100 },
+      hrv: { rmssd: 40 + (index % 3), sdnn: 45 },
+    }));
+  }
+
+  (agent as any).processDetection();
+
+  assert(state(agent).baseline !== null, "baseline should be established after 10 samples");
+  assert(existsSync(TEST_BASELINE_PATH), "baseline file persisted");
+
+  const raw = readFileSync(TEST_BASELINE_PATH, "utf-8");
+  const parsed = JSON.parse(raw);
+  assertEqual(parsed.stage, "provisional", "persisted stage");
+  cleanup();
+});
+
+// 4c. Persisted baseline is loaded on startup path
+test("test_loadPersistedBaseline", () => {
+  writeFileSync(
+    TEST_BASELINE_PATH,
+    JSON.stringify({
+      baseline: {
+        restingHR: 69,
+        baselineHRV: 41.5,
+        updatedAt: Date.now() - 10000,
+      },
+      stage: "stable",
+      savedAt: Date.now(),
+    })
+  );
+
+  const agent = makeAgent();
+  (agent as any).loadPersistedBaseline();
+
+  assert(state(agent).baseline !== null, "baseline loaded");
+  assertEqual((agent as any).baselineStage, "stable", "baseline stage loaded");
   cleanup();
 });
 

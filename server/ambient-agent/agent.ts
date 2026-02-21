@@ -11,8 +11,8 @@
  */
 
 import WebSocket from "ws";
-import { mkdirSync } from "fs";
-import { dirname } from "path";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { HRVCalculator } from "./hrv-calculator";
 import {
   detectFlowState,
@@ -97,6 +97,10 @@ const GAP_CLEAR_THRESHOLD_MS = 5 * 60 * 1000; // 5 min — clear stale history
 const GAP_DEBOUNCE_MS = 5000; // 5s — ignore rapid flaps
 const WARMUP_BATCHES = 2; // 2 batches (~60s) before resuming detection
 const BACKFILL_MAX_AGE_MS = 60 * 60 * 1000; // 1 hr — discard old backfill
+const PROVISIONAL_BASELINE_MIN_HR_SAMPLES = 10;
+const STABLE_BASELINE_MIN_HR_SAMPLES = 30;
+
+type BaselineStage = "none" | "provisional" | "stable";
 
 // ── Quiet Hours Check ───────────────────────────────────────────────
 
@@ -154,6 +158,8 @@ export class AmbientAgent {
 
   // Timestamp of the last batch that included a location field (ms)
   private lastLocationReceivedAt: number | null = null;
+  private baselineStage: BaselineStage = "none";
+  private baselineFilePath: string;
 
   constructor(config: Partial<AmbientAgentConfig> = {}, options?: { useOpenClaw?: boolean }) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -164,6 +170,7 @@ export class AmbientAgent {
       this.config.logPath.replace(".jsonl", "-energy.jsonl"),
       5 // Log at most every 5 minutes
     );
+    this.baselineFilePath = join(dirname(this.config.logPath), "baseline-state.json");
 
     this.state = this.createInitialState();
 
@@ -255,6 +262,7 @@ export class AmbientAgent {
 
     // Ensure data directory exists
     mkdirSync(dirname(this.config.logPath), { recursive: true });
+    this.loadPersistedBaseline();
 
     // Load today's interventions from log
     const todayInterventions = await this.logger.getTodayInterventions();
@@ -273,6 +281,56 @@ export class AmbientAgent {
     this.connect();
     this.startProcessingLoop();
     this.startHeartbeat();
+  }
+
+  private loadPersistedBaseline(): void {
+    try {
+      if (!existsSync(this.baselineFilePath)) return;
+      const raw = readFileSync(this.baselineFilePath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        baseline?: PersonalBaseline;
+        stage?: BaselineStage;
+      };
+      if (!parsed.baseline) return;
+
+      const baseline = parsed.baseline;
+      if (
+        typeof baseline.restingHR !== "number" ||
+        typeof baseline.baselineHRV !== "number" ||
+        typeof baseline.updatedAt !== "number"
+      ) {
+        this.log("[Baseline] Persisted baseline invalid, ignoring");
+        return;
+      }
+
+      this.state.baseline = baseline;
+      this.baselineStage = parsed.stage === "stable" ? "stable" : "provisional";
+      this.log(
+        `[Baseline] Loaded persisted ${this.baselineStage} baseline: HR=${baseline.restingHR}bpm, HRV=${baseline.baselineHRV.toFixed(1)}ms`
+      );
+    } catch (err) {
+      this.log(`[Baseline] Failed to load persisted baseline: ${String(err)}`);
+    }
+  }
+
+  private persistBaseline(stage: Exclude<BaselineStage, "none">): void {
+    if (!this.state.baseline) return;
+    try {
+      writeFileSync(
+        this.baselineFilePath,
+        JSON.stringify(
+          {
+            baseline: this.state.baseline,
+            stage,
+            savedAt: Date.now(),
+          },
+          null,
+          2
+        )
+      );
+    } catch (err) {
+      this.log(`[Baseline] Persist failed (non-fatal): ${String(err)}`);
+    }
   }
 
   stop(): void {
@@ -410,12 +468,11 @@ export class AmbientAgent {
         return;
       }
 
-      // Long gap: clear stale history and baseline
+      // Long gap: clear stale history, retain baseline (marked stale-by-age via updatedAt)
       if (gapMs >= GAP_CLEAR_THRESHOLD_MS) {
         this.hrHistory.length = 0;
         this.hrvHistory.length = 0;
-        this.state.baseline = null;
-        this.log(`Clearing stale history after ${Math.round(gapMs / 1000)}s gap`);
+        this.log(`Clearing stale history after ${Math.round(gapMs / 1000)}s gap (baseline retained)`);
       }
 
       // All non-debounced gaps: enter warm-up, log gap event
@@ -656,13 +713,29 @@ export class AmbientAgent {
   }
 
   private async processDetection(): Promise<void> {
-    // Update baseline if we have enough data
-    if (!this.state.baseline && this.hrHistory.length >= 30) {
+    // Establish provisional baseline quickly, then promote to stable baseline
+    if (!this.state.baseline && this.hrHistory.length >= PROVISIONAL_BASELINE_MIN_HR_SAMPLES) {
       const baseline = estimateBaseline(this.hrHistory, this.hrvHistory);
       if (baseline) {
         this.state.baseline = baseline;
+        this.baselineStage = "provisional";
+        this.persistBaseline("provisional");
         this.log(
-          `Baseline established: HR=${baseline.restingHR}bpm, HRV=${baseline.baselineHRV.toFixed(1)}ms`
+          `Baseline established (provisional): HR=${baseline.restingHR}bpm, HRV=${baseline.baselineHRV.toFixed(1)}ms`
+        );
+      }
+    } else if (
+      this.state.baseline &&
+      this.baselineStage !== "stable" &&
+      this.hrHistory.length >= STABLE_BASELINE_MIN_HR_SAMPLES
+    ) {
+      const baseline = estimateBaseline(this.hrHistory, this.hrvHistory);
+      if (baseline) {
+        this.state.baseline = baseline;
+        this.baselineStage = "stable";
+        this.persistBaseline("stable");
+        this.log(
+          `Baseline promoted to stable: HR=${baseline.restingHR}bpm, HRV=${baseline.baselineHRV.toFixed(1)}ms`
         );
       }
     }

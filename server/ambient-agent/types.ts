@@ -209,6 +209,9 @@ export interface AmbientAgentState {
 
   /** When the agent started */
   startedAt: number;
+
+  /** Active sensor-fusion session ID (optional) */
+  sessionId?: string;
 }
 
 // ── Configuration ───────────────────────────────────────────────────
