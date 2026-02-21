@@ -388,6 +388,11 @@ export class AmbientAgent {
     this.state.watchDeviceName = msg.deviceName;
 
     if (msg.connected) {
+      // Already connected or warming up — ignore duplicate connected messages
+      if (this.state.connectionState !== "disconnected") {
+        return;
+      }
+
       // First connect (never disconnected before) — go straight to connected
       if (this.state.disconnectedAt === null) {
         this.state.connectionState = "connected";

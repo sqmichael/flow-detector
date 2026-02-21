@@ -271,6 +271,50 @@ test("test_staleBackfill_discarded", () => {
   cleanup();
 });
 
+// 8. Duplicate connected messages ignored
+test("test_duplicateConnected_ignored", () => {
+  const agent = makeAgent();
+
+  // First connect + add history + set baseline
+  callHandleWatchStatus(agent, true);
+  callHandleBatch(agent, makeBatch());
+  callHandleBatch(agent, makeBatch());
+  const historyBefore = hrHistory(agent).length;
+  (agent as any).state.baseline = { restingHR: 72, baselineHRV: 45, updatedAt: Date.now() };
+
+  assertEqual(state(agent).connectionState, "connected", "should be connected");
+
+  // Send duplicate connected — should be a no-op
+  callHandleWatchStatus(agent, true);
+
+  assertEqual(state(agent).connectionState, "connected", "still connected (not warming_up)");
+  assertEqual(hrHistory(agent).length, historyBefore, "HR history unchanged");
+  assert(state(agent).baseline !== null, "baseline unchanged");
+  assertEqual(readLogLines().length, 0, "no gap events logged");
+  cleanup();
+});
+
+// 9. Duplicate connected during warm-up ignored
+test("test_duplicateConnected_duringWarmup_ignored", () => {
+  const agent = makeAgent();
+
+  // Connect, disconnect, reconnect with medium gap → warming_up
+  callHandleWatchStatus(agent, true);
+  callHandleWatchStatus(agent, false);
+  (agent as any).state.disconnectedAt = Date.now() - 60000;
+  callHandleWatchStatus(agent, true);
+  assertEqual(state(agent).connectionState, "warming_up", "should be warming up");
+
+  const logsBefore = readLogLines().length;
+
+  // Send duplicate connected during warm-up — should be a no-op
+  callHandleWatchStatus(agent, true);
+
+  assertEqual(state(agent).connectionState, "warming_up", "still warming up");
+  assertEqual(readLogLines().length, logsBefore, "no additional gap events");
+  cleanup();
+});
+
 // ── Summary ──────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
