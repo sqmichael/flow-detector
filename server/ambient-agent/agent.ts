@@ -237,17 +237,33 @@ export class AmbientAgent {
     try {
       const { spawnSync } = require("child_process");
       const contextJson = JSON.stringify(context);
-      const result = spawnSync(
-        "python3",
-        ["/home/michael/.openclaw/workspace/scripts/update-biometric-context.py"],
-        {
+      const writerCandidates = [
+        process.env.OPENCLAW_CONTEXT_WRITER,
+        "/root/flow-detector/.openclaw-workspace/scripts/update-biometric-context.py",
+        "/home/michael/.openclaw/workspace/scripts/update-biometric-context.py",
+      ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+      for (const writerPath of writerCandidates) {
+        if (!existsSync(writerPath)) continue;
+        const result = spawnSync("python3", [writerPath], {
           input: contextJson,
           encoding: "utf-8",
           timeout: 5000,
+        });
+        if (result.status === 0) {
+          return;
         }
-      );
-      if (result.status !== 0 && result.stderr) {
-        this.log(`[MainContext] Update failed: ${result.stderr}`);
+        if (result.stderr) {
+          this.log(`[MainContext] Update failed via ${writerPath}: ${result.stderr}`);
+        }
+      }
+
+      // Fallback: write context locally so OpenClaw workspace tools can still read it.
+      try {
+        const fallbackPath = ".openclaw-workspace/BIOMETRIC_CONTEXT.json";
+        writeFileSync(fallbackPath, JSON.stringify(context, null, 2));
+      } catch (fallbackErr) {
+        this.log(`[MainContext] Fallback write failed: ${String(fallbackErr)}`);
       }
     } catch (err) {
       // Non-critical — don't break the ambient agent if this fails
