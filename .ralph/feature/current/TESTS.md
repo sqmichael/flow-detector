@@ -1,19 +1,19 @@
-# Tests: Watch Disconnect Resilience
+# Test Plan
 
-## Unit Tests
-
-- [ ] `test_firstConnect_noWarmup` — First connect with disconnectedAt===null → connected immediately
-- [ ] `test_shortGap_debounced` — Gap <5s: no warm-up, no gap event
-- [ ] `test_mediumGap_warmupNoHistoryClear` — Gap 60s: warm-up entered, history preserved
-- [ ] `test_longGap_clearsHistoryAndBaseline` — Gap >5min: history cleared, baseline null
-- [ ] `test_warmup_completesAfterBatches` — 2 batches transitions warming_up to connected
-- [ ] `test_warmup_blocksDetection` — Disqualifier returned during warming_up
-- [ ] `test_staleBackfill_discarded` — Batch >1hr old skipped
+## Coverage Map
+| Behavior | Test Type | Where |
+|----------|----------|-------|
+| Repo entrypoint clarity and command discoverability | Manual doc validation | `README.md` |
+| Documentation status discoverability | Manual doc validation | `docs/README.md` |
+| Architecture accuracy vs current runtime paths | Manual cross-check | `docs/architecture.md` |
+| Superseded plan clearly labeled | Manual doc validation | `docs/WATCH-BRIDGE-PLAN.md` |
+| Setup command portability | Manual doc validation | `server/calling/SETUP.md` |
 
 ## Edge Cases
+- Existing contributors using old SensorServer docs should immediately see superseded warning.
+- Setup steps should remain valid even without root `.env.example`.
+- Doc links should be readable from both repo root and `docs/` context.
 
-| Case | Expected | Level |
-|------|----------|-------|
-| Agent starts disconnected | connectionState="disconnected", no gap on first connect | Unit |
-| Multiple rapid reconnects | Each resets batchesSinceReconnect; only gaps >5s log events | Unit |
-| 100-batch flood on reconnect | Batches count toward warm-up, stale ones discarded | Unit |
+## Notes
+- This iteration is documentation-only; no automated test suite changes required.
+- Validation performed via file/path checks and direct content review.

@@ -34,30 +34,31 @@ Alternatively, you can manually create the config with these settings:
 
 **Backend (Call Service):**
 
-1. Copy the example file:
+1. Create `server/calling/.env`:
    ```bash
    cd server/calling
-   cp .env.example .env
-   ```
-
-2. Edit `server/calling/.env` and fill in your credentials:
-   ```bash
+   cat > .env << 'EOF'
    TWILIO_ACCOUNT_SID=AC1234...
    TWILIO_AUTH_TOKEN=abc123...
    TWILIO_PHONE_NUMBER=+15551234567
    HUME_API_KEY=hume_...
    HUME_CONFIG_ID=conf_...
    USER_PHONE_NUMBER=+15559876543
+   EOF
    ```
+
+2. Replace the placeholder values with real credentials.
 
 **Frontend (Next.js Dashboard):**
 
 The frontend needs to know where to find the call service. If you're using the default port (8766), no configuration is needed. If you change the port:
 
-1. Create a `.env.local` file in the project root:
+1. Create `.env.local` in the project root:
    ```bash
-   cd /home/user/flow-detector
-   cp .env.example .env.local
+   cd /path/to/flow-detector
+   cat > .env.local << 'EOF'
+   NEXT_PUBLIC_CALL_SERVICE_PORT=8766
+   EOF
    ```
 
 2. Uncomment and set the port:
@@ -73,7 +74,7 @@ The frontend needs to know where to find the call service. If you're using the d
 ### 4. Install Dependencies
 
 ```bash
-cd /home/user/flow-detector
+cd /path/to/flow-detector
 npm install
 ```
 

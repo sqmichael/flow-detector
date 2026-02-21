@@ -1,43 +1,26 @@
-# Architecture: Watch Disconnect Resilience
+# Architecture
 
-## Context Diagram
+## Components
+- `README.md` (new): repo-level entrypoint for purpose, quick start, and navigation.
+- `docs/README.md` (new): docs taxonomy and status map.
+- `docs/architecture.md` (updated): current system architecture narrative.
+- `docs/WATCH-BRIDGE-PLAN.md` (updated): historical marker to prevent misuse.
+- `server/calling/SETUP.md` (updated): runnable setup instructions.
 
-```
-Galaxy Watch 8 ──ws──▶ watch-relay.ts ──ws──▶ Browser / Agent consumers
-                ◀─ping─
-```
+## Data Flow
+1. User lands in `README.md`.
+2. User follows links into `docs/README.md` for doc selection.
+3. User uses current architecture/setup docs to run relevant services.
+4. User avoids superseded SensorServer path due explicit labeling.
 
-Android kills watch process → START_STICKY restarts → Room replays pending batches → OkHttp reconnects. Server side has no gap awareness — this feature adds it.
+## Interfaces / Contracts
+- `README.md` must reference existing docs and runnable commands.
+- `docs/README.md` must classify docs by operational status.
+- `docs/architecture.md` must match implemented runtime seams.
+- Historical docs must declare superseded status near the top.
+- Setup docs must avoid references to non-existent templates.
 
-## Data Flow (Proposed)
-
-```
-Watch Disconnect
-  ├─ Agent: log disconnect event, mark state = "disconnected"
-  ... gap ...
-Watch Reconnect
-  ├─ Agent: log reconnect event with gap_duration_ms
-  ├─ Agent: if gap > 5 min → clear history + invalidate baseline
-  ├─ Agent: if gap > 5s → enter "warming_up" state
-  ├─ Agent: discard backfill batches older than 1hr
-  ├─ Agent: once 2 batches received → state = "connected", resume detection
-```
-
-## State Ownership
-
-| State | Owner | Gap Behavior |
-|-------|-------|-------------|
-| Sensor data (HR/IBI/EDA) | Watch app (Room DB) | Survives process kill |
-| HR/HRV history | Ambient agent (memory) | Clear after 5min gaps |
-| Baseline | Ambient agent (memory) | Invalidate after 5min gaps |
-| Gap events | Ambient agent (JSONL log) | Persisted for analysis |
-| Connection state | Ambient agent (memory) | connected/disconnected/warming_up |
-
-## Key Decisions
-
-| Chose | Not | Why |
-|-------|-----|-----|
-| Clear history after 5min gap | Keep across all gaps | Stale pre-gap data misrepresents current state |
-| 2-batch warm-up | Immediate resume | Brief burst shouldn't trigger against stale baselines |
-| Gap events in same JSONL log | Separate file | Simpler; gap events are just another event type |
-| Server-side only | Also fix browser | Agent is the field test bottleneck; browser has tier drop-back |
+## Failure Modes
+- Stale references remain in untouched docs and reintroduce confusion.
+- New docs drift from code as architecture evolves.
+- Contributors bypass index docs and continue using old links.

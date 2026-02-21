@@ -1,59 +1,68 @@
 # Architecture
 
+Current architecture uses a custom Galaxy Watch app and local relay server.
+Older SensorServer-based docs are superseded.
+
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Galaxy Watch 7 │     │   Mudra Link    │     │ MacBook Webcam  │
-│   (HR / HRV)    │     │ (Neural/SNC)    │     │  (Eye Tracking) │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │ WebSocket             │ WebSocket             │ Local
-         │ (SensorServer)        │ (Custom Relay)        │ (MediaPipe)
-         └───────────────────────┼───────────────────────┘
+┌─────────────────┐                       ┌─────────────────┐
+│ Galaxy Watch 8  │                       │ MacBook Webcam  │
+│(HR+IBI+EDA+PPG+ │                       │  (Eye Tracking) │
+│ Accelerometer)  │                       └────────┬────────┘
+└────────┬────────┘                                │ Local
+         │ WebSocket (LAN)                         │ (MediaPipe)
+         ▼                                         │
+┌─────────────────┐                                │
+│ watch-relay.ts  │                                │
+│ Node + WS :8765 │                                │
+│ /watch → /browser                               │
+└────────┬────────┘                                │
+         │ ws://localhost:8765                     │
+         └─────────────────────────────────────────┘
                                  ▼
                     ┌────────────────────────┐
-                    │     Fusion Hub         │
-                    │  (React + Socket.io)   │
+                    │   Fusion + Scoring     │
+                    │  (Next.js, client-side)│
                     │                        │
-                    │  Flow = (HRV × Rhythm) │
-                    │         - Blinks       │
+                    │  Tiered scoring from   │
+                    │  gaze + HRV + EDA +    │
+                    │  stillness             │
                     └───────────┬────────────┘
                                 │
                                 ▼
                     ┌────────────────────────┐
-                    │   Mac Focus Mode       │
-                    │  (node-applescript)    │
+                    │ Ambient Agent + Calls  │
+                    │ + Focus Mode Actions   │
                     └────────────────────────┘
 ```
 
-## Data Sources
+## Components
 
-### 1. Galaxy Watch 7 (via SensorServer)
-- **Tool**: SensorServer app on Z Flip
-- **Protocol**: WebSocket server on phone
-- **Data**: Heart Rate, IBI (Inter-Beat Interval) for HRV
-- **Access**: Samsung Health Data SDK (Privileged Access on Z Flip)
+### 1. Watch App (`watch-app/`)
+- **Platform**: Wear OS (Galaxy Watch 8 target)
+- **Protocol**: Watch is a WebSocket client to relay `/watch`
+- **Data**: HR, IBI, EDA, PPG, accelerometer batches
 
-### 2. Mudra Link (Neural)
-- **Repo**: Mudra Android App Example
-- **Interface**: MudraDelegate
-- **Data**: Surface Neural Conductance (SNC) for intent detection
-- **Method**: Add WebSocket.send() to forward data to MacBook
+### 2. Relay + Sensor Fusion (`server/watch-relay.ts`, `server/sensor-fusion/`)
+- Receives watch data on `/watch`
+- Fans out to browser/agent clients on `/browser`
+- Persists batches to SQLite for downstream analysis
 
-### 3. MacBook Webcam (Eye Tracking)
-- **Tool**: MediaPipe Face Landmarker (WASM)
-- **Data**: 478 3D face landmarks
-- **Key Landmarks**: 159 (Upper Eyelid), 145 (Lower Eyelid)
-- **Metric**: Eye Aspect Ratio → Blink Rate
+### 3. Dashboard + Flow Scoring (`src/`)
+- MediaPipe eye tracking in-browser
+- Personal-baseline scoring with EMA smoothing
+- Automatic tier fallback when sensors disconnect
 
-### 4. Fusion Hub
-- **Stack**: React + Socket.io (Node.js)
-- **Role**: Traffic controller for all sensor streams
-- **Output**: Flow Score + Focus Mode trigger
+### 4. Ambient Agent (`server/ambient-agent/`)
+- Detects flow, stress, and recovery patterns
+- Uses context gating before interventions
+- Can trigger Focus Mode, notifications, or voice-call pathways
 
-## Flow Formula
+### 5. Calling + Memory (`server/calling/`)
+- Twilio + Hume voice call orchestration
+- Lightweight memory layer with theme-based recall and decay
 
-```
-Flow = (HRV × Rhythm) - Blinks
-```
-- **HRV**: Heart Rate Variability from watch IBI data
-- **Rhythm**: Derived from neural SNC patterns (Mudra)
-- **Blinks**: Blink rate from eye tracking (MediaPipe)
+## Data Paths
+
+- **Live path**: `Watch App -> Relay (/watch) -> Browser/Agent (/browser)`
+- **Storage path**: `Relay -> SQLite (sensor-fusion DB)`
+- **Intervention path**: `Ambient Agent -> Focus/Push/Call service`

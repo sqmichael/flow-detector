@@ -1,5 +1,9 @@
 # Watch Bridge Implementation Plan
 
+> Status: **Historical / superseded**
+> This plan describes the original SensorServer bridge path and is kept for reference only.
+> The current implementation uses the custom Wear OS app in `watch-app/` and `server/watch-relay.ts`.
+
 Use this plan with Claude Code on your local Mac to implement the Samsung Galaxy Watch integration.
 
 ---

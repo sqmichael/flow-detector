@@ -1,41 +1,34 @@
-# Assumptions: Watch Disconnect Resilience
+# Assumptions
 
 ## User Context
-
-| Field | Value |
-|-------|-------|
-| Who | Developer (Michael) running field tests with ambient agent |
-| Environment | Galaxy Watch 8 on wrist, MacBook running relay + agent at desk |
-| Today's solution | Watch reconnects via START_STICKY + backoff, but agent has no gap awareness |
-| Frequency | Watch disconnects multiple times per day (Android Doze, Freecessor, low RAM) |
-| Constraints | Can't prevent Android from killing processes; must handle it gracefully |
+| Question | Answer |
+|----------|--------|
+| Who is the user? | Core maintainer/contributor working quickly across watch, server, and dashboard code. |
+| What's their environment? | Local dev workflow in a mixed TypeScript + Kotlin repo with many historical docs. |
+| How do they solve this today? | Open multiple markdown files and infer current state manually. |
+| How often do they need this? | Every coding session and handoff. |
+| What constraints exist? | Must preserve historical context while making current docs discoverable and accurate. |
 
 ## Solution Assumptions
-
-1. The watch app's START_STICKY + Room persistence already handles the watch side adequately
-2. Most disconnects are 30s-5min (Android restarts foreground service relatively quickly)
-3. Data older than 1 hour is not useful for real-time detection
-4. 2 batches (~60s) is sufficient warm-up before resuming detection
-5. Gap duration is the critical metric for field test analysis
+1. A root `README.md` plus a docs index materially reduces onboarding and navigation friction.
+2. Marking superseded docs explicitly prevents wrong implementation choices.
+3. The highest value is aligning architecture/setup docs to the code that actually runs today.
+4. Existing docs should be reorganized by status (current/active/historical), not deleted.
+5. A lightweight consistency pass (paths/commands) is enough for this iteration.
 
 ## Riskiest Assumption
-
-Assumption #1: The watch side is adequate. If Room loses data or START_STICKY fails on Samsung Wear OS, server-side fixes won't help.
+Assumption 1 is riskiest: if contributors still cannot quickly find the right doc, cleanup effort has low impact.
 
 ## Validation Test
-
-| Field | Value |
-|-------|-------|
-| Test | Kill watch app process manually, wait 2 min, verify pending batches survive and sync on reconnect |
-| Pass | Batches saved pre-kill appear in relay log post-reconnect |
-| Fail | Batches lost, or service doesn't restart within 60s |
+- **Test:** Verify new docs provide direct entry points and that referenced key files/commands exist.
+- **Pass:** New contributor can start from `README.md` and reach current architecture + setup docs without ambiguity.
+- **Fail:** Entry docs still point to stale paths/flows or require deep manual discovery.
 
 ## Result
-
-UNTESTABLE in planning session — requires physical watch. Architecture is sound per code review.
+- [x] PASS — proceed
+- [ ] FAIL — stop and reassess
+- [ ] UNTESTABLE — document why, proceed with caution
 
 ## Unknowns Remaining
-
-- Exact frequency/duration distribution of disconnects during field test
-- Whether Samsung Freecessor respects Ongoing Activity API consistently
-- Whether 100-batch sync cap causes data loss after long gaps (>50 min offline)
+- Whether additional archived docs should be collapsed further after real contributor feedback.
+- Whether call-service setup should be split into quickstart vs production guides.
