@@ -30,7 +30,7 @@ import {
   enableFocusMode,
   sendPushNotification,
 } from "./interventions";
-import { InterventionLogger, EnergyLogger } from "./logger";
+import { InterventionLogger, EnergyLogger, logGapEvent } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
 import { buildOpenClawContext, fetchCalendarContext, isCurrentlyInEvent, type OpenClawContext } from "./openclaw-context";
@@ -91,6 +91,12 @@ type IncomingMessage = WatchHeartRate | WatchEDA | WatchStatus | WatchHandshake 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 const HR_HISTORY_SIZE = 60 * 60; // 1 hour of samples at 1 Hz
 const HRV_HISTORY_SIZE = 60 * 10; // 10 minutes of HRV samples
+
+// ── Gap Handling Constants ─────────────────────────────────────────
+const GAP_CLEAR_THRESHOLD_MS = 5 * 60 * 1000; // 5 min — clear stale history
+const GAP_DEBOUNCE_MS = 5000; // 5s — ignore rapid flaps
+const WARMUP_BATCHES = 2; // 2 batches (~60s) before resuming detection
+const BACKFILL_MAX_AGE_MS = 60 * 60 * 1000; // 1 hr — discard old backfill
 
 // ── Quiet Hours Check ───────────────────────────────────────────────
 
@@ -171,6 +177,11 @@ export class AmbientAgent {
       isConnected: false,
       isWatchConnected: false,
       watchDeviceName: null,
+
+      connectionState: "disconnected",
+      disconnectedAt: null,
+      reconnectedAt: null,
+      batchesSinceReconnect: 0,
 
       currentHR: null,
       currentHRV: null,
@@ -377,11 +388,52 @@ export class AmbientAgent {
     this.state.watchDeviceName = msg.deviceName;
 
     if (msg.connected) {
-      this.log(`Watch connected: ${msg.deviceName}`);
+      // First connect (never disconnected before) — go straight to connected
+      if (this.state.disconnectedAt === null) {
+        this.state.connectionState = "connected";
+        this.log(`Watch connected: ${msg.deviceName}`);
+        return;
+      }
+
+      // Calculate gap duration
+      const gapMs = Date.now() - this.state.disconnectedAt;
+
+      // Debounce: sub-5s flaps → connected immediately, no warm-up, no gap event
+      if (gapMs < GAP_DEBOUNCE_MS) {
+        this.state.connectionState = "connected";
+        this.log(`Watch reconnected: ${msg.deviceName} (gap ${Math.round(gapMs / 1000)}s — debounced)`);
+        return;
+      }
+
+      // Long gap: clear stale history and baseline
+      if (gapMs >= GAP_CLEAR_THRESHOLD_MS) {
+        this.hrHistory.length = 0;
+        this.hrvHistory.length = 0;
+        this.state.baseline = null;
+        this.log(`Clearing stale history after ${Math.round(gapMs / 1000)}s gap`);
+      }
+
+      // All non-debounced gaps: enter warm-up, log gap event
+      this.state.connectionState = "warming_up";
+      this.state.batchesSinceReconnect = 0;
+      this.state.reconnectedAt = Date.now();
+
+      logGapEvent({
+        type: "gap",
+        disconnectedAt: this.state.disconnectedAt,
+        reconnectedAt: this.state.reconnectedAt,
+        gapDurationMs: gapMs,
+        batchesDuringWarmup: 0, // Updated when warm-up completes
+      }, this.config.logPath);
+
+      this.log(`Watch reconnected: ${msg.deviceName} (gap ${Math.round(gapMs / 1000)}s — warming up)`);
     } else {
-      this.log("Watch disconnected");
+      // Disconnect
+      this.state.connectionState = "disconnected";
+      this.state.disconnectedAt = Date.now();
       this.state.currentLocation = null;
       this.lastLocationReceivedAt = null;
+      this.log("Watch disconnected");
     }
   }
 
@@ -419,6 +471,22 @@ export class AmbientAgent {
   }
 
   private handleBatch(msg: BatchMessage): void {
+    // Discard stale backfill batches (>1hr old)
+    const batchAge = Date.now() - msg.timestamp;
+    if (batchAge > BACKFILL_MAX_AGE_MS) {
+      this.log(`Discarding stale backfill batch (age: ${Math.round(batchAge / 1000)}s)`);
+      return;
+    }
+
+    // Warm-up tracking: count batches since reconnect
+    if (this.state.connectionState === "warming_up") {
+      this.state.batchesSinceReconnect++;
+      if (this.state.batchesSinceReconnect >= WARMUP_BATCHES) {
+        this.state.connectionState = "connected";
+        this.log(`Warm-up complete after ${this.state.batchesSinceReconnect} batches`);
+      }
+    }
+
     const hasHR = msg.hr && msg.hr.samples > 0;
     const hasEDA = msg.eda && msg.eda.meanScl > 0;
     const hasLocation = !!msg.location;
@@ -637,6 +705,11 @@ export class AmbientAgent {
     // Watch disconnected
     if (!this.state.isWatchConnected) {
       return "Watch disconnected — go silent";
+    }
+
+    // Warming up after reconnect
+    if (this.state.connectionState === "warming_up") {
+      return `Warming up after reconnect — need ${WARMUP_BATCHES - this.state.batchesSinceReconnect} more batches`;
     }
 
     // No baseline established

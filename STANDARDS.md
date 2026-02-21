@@ -32,6 +32,7 @@
 - No bare `catch {}` — always log with structured context
 - WebSocket reconnection uses exponential backoff (1s → 2s → 4s → 30s max)
 - Graceful degradation: sensor loss drops to next available tier, never crashes
+- After watch reconnect (gap >5s), agent enters warm-up state requiring 2 batches (~60s) before resuming detection
 
 ## Testing
 
@@ -69,3 +70,6 @@
 - DO NOT add time-based fallback triggers — interventions are sensor-only
 - DO NOT exceed 2 interventions per day (`maxInterventionsPerDay: 2`)
 - DO NOT commit `.env` files or API keys
+- DO NOT trigger interventions during warm-up period after watch reconnect
+- DO NOT keep stale HR/HRV history across gaps longer than 5 minutes
+- DO NOT process backfill batches older than 1 hour

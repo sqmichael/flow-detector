@@ -7,7 +7,7 @@
 
 import { appendFile, readFile, access, writeFile } from "fs/promises";
 import { constants } from "fs";
-import type { Intervention } from "./types";
+import type { Intervention, GapEvent } from "./types";
 import type { LowEnergyState } from "./detectors";
 
 // ── Log Entry Types ─────────────────────────────────────────────────
@@ -285,6 +285,30 @@ export function formatSummary(summary: DailySummary): string {
   lines.push(`Want again: ${summary.wantAgainTomorrow} yes`);
 
   return lines.join("\n");
+}
+
+// ── Gap Event Logger ─────────────────────────────────────────────────
+
+/**
+ * Log a disconnect/reconnect gap event to the intervention JSONL log.
+ * Non-critical: errors are logged to stderr but don't throw.
+ */
+export function logGapEvent(event: GapEvent, logPath: string): void {
+  try {
+    const entry = {
+      timestamp: Date.now(),
+      date: new Date().toISOString().split("T")[0],
+      type: "gap" as const,
+      disconnectedAt: event.disconnectedAt,
+      reconnectedAt: event.reconnectedAt,
+      gapDurationMs: event.gapDurationMs,
+      batchesDuringWarmup: event.batchesDuringWarmup,
+    };
+    const line = JSON.stringify(entry) + "\n";
+    require("fs").appendFileSync(logPath, line);
+  } catch (err) {
+    console.error("[Logger] Failed to log gap event:", err);
+  }
 }
 
 // ── Energy State Logger ──────────────────────────────────────────────
