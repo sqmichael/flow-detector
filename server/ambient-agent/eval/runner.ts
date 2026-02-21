@@ -201,6 +201,11 @@ function codeDisqualify(context: OpenClawContext): { disqualified: boolean; reas
     return { disqualified: true, reason: "Watch disconnected — go silent" };
   }
 
+  // Watch quality hard gate
+  if (sensors.watchQuality?.status === "bad") {
+    return { disqualified: true, reason: "Watch quality bad — biometric data unreliable" };
+  }
+
   // No baseline
   if (!context.baseline) {
     return { disqualified: true, reason: "No baseline — can't make informed decisions" };

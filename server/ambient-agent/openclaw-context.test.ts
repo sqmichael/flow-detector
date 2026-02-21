@@ -5,6 +5,8 @@
 import {
   isCurrentlyInEvent,
   buildOpenClawContext,
+  buildOpenClawDecisionPrompt,
+  deriveWatchQualityStatus,
   type CalendarEvent,
   type CalendarContext,
 } from "./openclaw-context";
@@ -118,11 +120,16 @@ function makeState(overrides: Partial<AmbientAgentState> = {}): AmbientAgentStat
     isConnected: true,
     isWatchConnected: true,
     watchDeviceName: "Galaxy Watch 8",
+    connectionState: "connected",
+    disconnectedAt: null,
+    reconnectedAt: null,
+    batchesSinceReconnect: 0,
     currentHR: 65,
     currentHRV: 40,
     currentSCL: null,
     currentLocation: null,
     lastSensorUpdate: NOW_MS,
+    watchQuality: null,
     baseline: makeBaseline(),
     flowProtection: {
       inFlowMode: false,
@@ -149,6 +156,45 @@ function makeState(overrides: Partial<AmbientAgentState> = {}): AmbientAgentStat
 }
 
 console.log("\nbuildOpenClawContext dynamicContext");
+
+test("sets watchQuality.status=good when quality is >= 50", () => {
+  const ctx = buildOpenClawContext(makeState({ watchQuality: 87 }), makeBaseline(), [], 2, 0, null);
+  assert(ctx.sensors.watchQuality.status === "good", "watch quality should be good");
+  assert(ctx.sensors.watchQuality.value === 87, "watch quality value should be retained");
+});
+
+test("sets watchQuality.status=bad when quality is < 50 and redacts biometrics", () => {
+  const ctx = buildOpenClawContext(
+    makeState({ watchQuality: 20, currentHR: 82, currentHRV: 25, currentSCL: 8.4 }),
+    makeBaseline(),
+    [],
+    2,
+    0,
+    null
+  );
+  assert(ctx.sensors.watchQuality.status === "bad", "watch quality should be bad");
+  assert(ctx.sensors.hr === null, "HR should be redacted");
+  assert(ctx.sensors.hrv === null, "HRV should be redacted");
+  assert(ctx.sensors.scl === null, "SCL should be redacted");
+});
+
+test("sets watchQuality.status=unknown when quality is null", () => {
+  const ctx = buildOpenClawContext(makeState({ watchQuality: null }), makeBaseline(), [], 2, 0, null);
+  assert(ctx.sensors.watchQuality.status === "unknown", "watch quality should be unknown");
+});
+
+test("deriveWatchQualityStatus returns expected status values", () => {
+  assert(deriveWatchQualityStatus(80) === "good", "80 should be good");
+  assert(deriveWatchQualityStatus(49) === "bad", "49 should be bad");
+  assert(deriveWatchQualityStatus(null) === "unknown", "null should be unknown");
+});
+
+test("buildOpenClawDecisionPrompt includes required hard-gate language", () => {
+  const ctx = buildOpenClawContext(makeState({ watchQuality: 20 }), makeBaseline(), [], 2, 0, null);
+  const prompt = buildOpenClawDecisionPrompt(ctx);
+  assert(prompt.includes('watchQuality.status == "bad"'), "prompt should mention bad-quality hard gate");
+  assert(prompt.includes("Return JSON only"), "prompt should require JSON-only output");
+});
 
 test("includes dynamicContext field in returned object", () => {
   const ctx = buildOpenClawContext(makeState(), makeBaseline(), [], 2, 0, null);

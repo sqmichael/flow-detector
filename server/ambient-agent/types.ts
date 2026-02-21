@@ -195,6 +195,8 @@ export interface AmbientAgentState {
   currentSCL: number | null;
   currentLocation: { latitude: number; longitude: number; accuracy: number } | null;
   lastSensorUpdate: number | null;
+  /** Watch signal quality (0-100, null if unknown) */
+  watchQuality: number | null;
 
   /** Personal baselines */
   baseline: PersonalBaseline | null;

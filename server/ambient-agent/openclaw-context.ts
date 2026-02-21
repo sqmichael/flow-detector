@@ -238,6 +238,10 @@ export interface OpenClawContext {
     hrv: number | null;
     scl: number | null;
     watchConnected: boolean;
+    watchQuality: {
+      status: "good" | "bad" | "unknown";
+      value: number | null;
+    };
     location?: { latitude: number; longitude: number; accuracy: number };
     /** Seconds since last sensor update (data freshness) */
     dataAgeSec: number | null;
@@ -280,6 +284,13 @@ export interface OpenClawContext {
   };
 }
 
+export function deriveWatchQualityStatus(
+  watchQuality: number | null
+): "good" | "bad" | "unknown" {
+  if (watchQuality === null) return "unknown";
+  return watchQuality < 50 ? "bad" : "good";
+}
+
 /**
  * Build compact context for OpenClaw decision-making.
  * Calendar context must be pre-fetched and passed in.
@@ -292,16 +303,19 @@ export function buildOpenClawContext(
   timezoneOffset: number,
   calendar: CalendarContext | null = null
 ): OpenClawContext {
+  const watchQualityStatus = deriveWatchQualityStatus(state.watchQuality);
+  const shouldRedactBiometrics = watchQualityStatus === "bad";
+
   // Calculate baseline deviations
   let hrDeviation: string | null = null;
   let hrvDeviation: string | null = null;
-  if (baseline && state.currentHR !== null) {
+  if (!shouldRedactBiometrics && baseline && state.currentHR !== null) {
     const pct = Math.round(
       ((state.currentHR - baseline.restingHR) / baseline.restingHR) * 100
     );
     hrDeviation = `${pct >= 0 ? "+" : ""}${pct}%`;
   }
-  if (baseline && state.currentHRV !== null) {
+  if (!shouldRedactBiometrics && baseline && state.currentHRV !== null) {
     const pct = Math.round(
       ((state.currentHRV - baseline.baselineHRV) / baseline.baselineHRV) * 100
     );
@@ -370,10 +384,22 @@ export function buildOpenClawContext(
   return {
     type: "intervention_decision",
     sensors: {
-      hr: state.currentHR,
-      hrv: state.currentHRV !== null ? Math.round(state.currentHRV * 10) / 10 : null,
-      scl: state.currentSCL !== null ? Math.round(state.currentSCL * 100) / 100 : null,
+      hr: shouldRedactBiometrics ? null : state.currentHR,
+      hrv: shouldRedactBiometrics
+        ? null
+        : state.currentHRV !== null
+          ? Math.round(state.currentHRV * 10) / 10
+          : null,
+      scl: shouldRedactBiometrics
+        ? null
+        : state.currentSCL !== null
+          ? Math.round(state.currentSCL * 100) / 100
+          : null,
       watchConnected: state.isWatchConnected,
+      watchQuality: {
+        status: watchQualityStatus,
+        value: state.watchQuality,
+      },
       ...(state.currentLocation ? { location: state.currentLocation } : {}),
       dataAgeSec,
     },
@@ -415,4 +441,34 @@ export function buildOpenClawContext(
       uptimeMinutes,
     },
   };
+}
+
+export function buildOpenClawDecisionPrompt(context: OpenClawContext): string {
+  return `You are deciding interventions from biometric context.
+
+Hard gate on watch quality:
+- If watchQuality.status == "bad", treat biometric data as unreliable.
+- In that case:
+  - Do NOT use HR/HRV/SCL to infer stress/flow/recovery.
+  - Return shouldIntervene=false unless calendar-only safety logic requires silence.
+  - reasoning must mention poor watch quality.
+  - actions must be [] (or no_action only).
+
+If watchQuality.status == "good":
+- Use HR/HRV/SCL + baseline + calendar + intervention history normally.
+- Prefer conservative decisions.
+
+Display policy:
+- bad quality: show "Watch quality bad" and hide numeric readings.
+- good quality: show numeric readings.
+
+Return JSON only:
+{
+  "shouldIntervene": boolean,
+  "actions": [{"type":"enable_focus_mode|disable_focus_mode|send_haptic|send_push|trigger_call|send_reflection|no_action","message":"optional","priority":"low|default|high","pattern":"gentle|urgent"}],
+  "reasoning": "one sentence"
+}
+
+Context:
+${JSON.stringify(context)}`;
 }

@@ -33,7 +33,14 @@ import {
 import { InterventionLogger, EnergyLogger, logGapEvent } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
-import { buildOpenClawContext, fetchCalendarContext, isCurrentlyInEvent, type OpenClawContext } from "./openclaw-context";
+import {
+  buildOpenClawContext,
+  buildOpenClawDecisionPrompt,
+  deriveWatchQualityStatus,
+  fetchCalendarContext,
+  isCurrentlyInEvent,
+  type OpenClawContext,
+} from "./openclaw-context";
 import type { CalendarContext } from "./openclaw-context";
 import { buildDynamicContext } from "./dynamic-context";
 import type { DynamicContext } from "./dynamic-context";
@@ -195,6 +202,7 @@ export class AmbientAgent {
       currentSCL: null,
       currentLocation: null,
       lastSensorUpdate: null,
+      watchQuality: null,
 
       baseline: null,
 
@@ -521,6 +529,7 @@ export class AmbientAgent {
 
     this.state.currentHR = msg.bpm;
     this.state.lastSensorUpdate = msg.timestamp;
+    this.state.watchQuality = msg.quality;
 
     // Add to history
     this.hrHistory.push({ hr: msg.bpm, timestamp: msg.timestamp });
@@ -756,7 +765,17 @@ export class AmbientAgent {
       }
     }
 
-    // Run all detectors to update state (always needed for status display)
+    // Hard gate: with bad watch quality, skip biometric inference entirely.
+    if (deriveWatchQualityStatus(this.state.watchQuality) === "bad") {
+      this.resetBiometricDetectionsForBadQuality();
+      const dq = this.checkDisqualifiers();
+      if (dq) {
+        this.log(`[DQ] ${dq}`);
+      }
+      return;
+    }
+
+    // Run all detectors to update state
     this.updateDetectorState();
 
     // Code-side disqualifiers — deterministic checks that don't need LLM
@@ -789,6 +808,18 @@ export class AmbientAgent {
   }
 
   /**
+   * When watch quality is bad, prevent stale detector state from driving any
+   * stress/flow/recovery inference until quality recovers.
+   */
+  private resetBiometricDetectionsForBadQuality(): void {
+    this.state.flowProtection.stableMinutes = 0;
+    this.state.stressDetection.isElevated = false;
+    this.state.stressDetection.elevationStartedAt = null;
+    this.state.stressDetection.elevatedMinutes = 0;
+    this.state.eveningReflection.recoveryDetected = false;
+  }
+
+  /**
    * Code-side disqualifiers — deterministic boolean checks enforced before
    * the model is called. These are the checks that models consistently fail
    * on (eval showed 4/10 DQ misses across all models without this).
@@ -799,6 +830,11 @@ export class AmbientAgent {
     // Watch disconnected
     if (!this.state.isWatchConnected) {
       return "Watch disconnected — go silent";
+    }
+
+    // Watch quality check — hard gate
+    if (deriveWatchQualityStatus(this.state.watchQuality) === "bad") {
+      return "Watch quality bad — biometric data unreliable";
     }
 
     // Warming up after reconnect
@@ -961,7 +997,7 @@ export class AmbientAgent {
       calendar
     );
 
-    const message = JSON.stringify(context);
+    const message = buildOpenClawDecisionPrompt(context);
 
     // Also update the main agent's biometric context file
     this.updateMainAgentContext(context);
@@ -1272,10 +1308,15 @@ export class AmbientAgent {
     lines.push(`║ Relay: ${connIcon}  Watch: ${this.state.isWatchConnected ? "🟢" : "🔴"} ${this.state.watchDeviceName || "---"}`.padEnd(37) + "║");
 
     // Current sensors
-    const hr = this.state.currentHR?.toFixed(0) ?? "---";
-    const hrv = this.state.currentHRV?.toFixed(0) ?? "---";
-    const scl = this.state.currentSCL?.toFixed(1) ?? "---";
-    lines.push(`║ HR: ${hr} bpm  HRV: ${hrv} ms  SCL: ${scl}`.padEnd(37) + "║");
+    const watchQualityStatus = deriveWatchQualityStatus(this.state.watchQuality);
+    if (watchQualityStatus === "bad") {
+      lines.push("║ Watch quality bad".padEnd(37) + "║");
+    } else {
+      const hr = this.state.currentHR?.toFixed(0) ?? "---";
+      const hrv = this.state.currentHRV?.toFixed(0) ?? "---";
+      const scl = this.state.currentSCL?.toFixed(1) ?? "---";
+      lines.push(`║ HR: ${hr} bpm  HRV: ${hrv} ms  SCL: ${scl}`.padEnd(37) + "║");
+    }
 
     // Baseline
     if (this.state.baseline) {
