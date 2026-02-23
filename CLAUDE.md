@@ -366,6 +366,15 @@ A structured approach to Claude Code sessions based on task type.
 
 See `.claude/orchestrator/ORCHESTRATOR.md` for full details.
 
+## Website Building (Kimi Vision Builder)
+
+When rebuilding or creating any website from a visual reference, use the Kimi K2.5 vision builder.
+Do NOT build HTML manually — Kimi's visual replication from screenshots is significantly better.
+
+**Tool:** `~/tools/kimi-vision-builder/build_site.py`
+- Usage: `python ~/tools/kimi-vision-builder/build_site.py --reference URL --brief brief.txt --output index.html [--color #HEX]`
+- Full learnings + API quirks documented in script header
+
 ## References
 
 - Architecture + data sources: `docs/architecture.md`
