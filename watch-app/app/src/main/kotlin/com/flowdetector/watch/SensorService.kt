@@ -66,6 +66,9 @@ class SensorService : LifecycleService() {
         private const val CHANNEL_ID = "flow_sensor_channel"
         const val EXTRA_SERVER_URL = "server_url"
         private const val BATCH_WINDOW_MS = 30_000L
+        private const val HR_CARRY_FORWARD_MAX_AGE_MS = 90_000L
+        private const val HR_STATUS_VALID = 1
+        private const val HR_STATUS_LOW_QUALITY = 2
     }
 
     // ── Batch Buffer ─────────────────────────────────────────────────
@@ -83,6 +86,12 @@ class SensorService : LifecycleService() {
     private val accelBuffer = mutableListOf<AccelSample>()
     private val bufferLock = Any()
     private var batchJob: Job? = null
+    private var hrAcceptedCount = 0
+    private var hrRejectedStatusCount = 0
+    private var hrRejectedValueCount = 0
+    private var lastRejectedHrStatus: Int? = null
+    private var lastValidHrBpm: Int? = null
+    private var lastValidHrTimestampMs: Long = 0L
 
     /**
      * Calculate RMSSD (Root Mean Square of Successive Differences) from IBI values.
@@ -137,22 +146,40 @@ class SensorService : LifecycleService() {
      * Data is ALWAYS saved locally first to prevent data loss.
      */
     private fun flushBatch() {
-        val (hrSamples, ibiSamples, edaSamples, ppgSamples, accelSamples) = synchronized(bufferLock) {
-            data class BufferSnapshot(
-                val hr: List<HrSample>,
-                val ibi: List<IbiSample>,
-                val eda: List<EdaSample>,
-                val ppg: List<PpgSample>,
-                val accel: List<AccelSample>
-            )
+        data class BufferSnapshot(
+            val hr: List<HrSample>,
+            val ibi: List<IbiSample>,
+            val eda: List<EdaSample>,
+            val ppg: List<PpgSample>,
+            val accel: List<AccelSample>,
+            val acceptedHrCount: Int,
+            val rejectedStatusCount: Int,
+            val rejectedValueCount: Int,
+            val lastRejectedStatus: Int?,
+            val lastKnownHr: Int?,
+            val lastKnownHrTimestampMs: Long
+        )
+        val snapshot = synchronized(bufferLock) {
             BufferSnapshot(
                 hrBuffer.toList().also { hrBuffer.clear() },
                 ibiBuffer.toList().also { ibiBuffer.clear() },
                 edaBuffer.toList().also { edaBuffer.clear() },
                 ppgBuffer.toList().also { ppgBuffer.clear() },
-                accelBuffer.toList().also { accelBuffer.clear() }
+                accelBuffer.toList().also { accelBuffer.clear() },
+                hrAcceptedCount.also { hrAcceptedCount = 0 },
+                hrRejectedStatusCount.also { hrRejectedStatusCount = 0 },
+                hrRejectedValueCount.also { hrRejectedValueCount = 0 },
+                lastRejectedHrStatus.also { lastRejectedHrStatus = null },
+                lastValidHrBpm,
+                lastValidHrTimestampMs
             )
         }
+        val hrSamples = snapshot.hr
+        val ibiSamples = snapshot.ibi
+        val edaSamples = snapshot.eda
+        val ppgSamples = snapshot.ppg
+        val accelSamples = snapshot.accel
+        val timestamp = System.currentTimeMillis()
 
         // Need at least some meaningful sensor data to send a batch
         if (hrSamples.isEmpty() && edaSamples.isEmpty() && ppgSamples.isEmpty()) {
@@ -161,6 +188,17 @@ class SensorService : LifecycleService() {
         }
 
         // HR aggregates (nullable — SDK delivers intermittently)
+        // Carry forward the most recent valid HR for short gaps to stabilize stream continuity.
+        val lastKnownHrAgeMs = if (snapshot.lastKnownHrTimestampMs > 0L) {
+            timestamp - snapshot.lastKnownHrTimestampMs
+        } else {
+            Long.MAX_VALUE
+        }
+        val useCarryForwardHr =
+            hrSamples.isEmpty() &&
+                snapshot.lastKnownHr != null &&
+                lastKnownHrAgeMs in 0..HR_CARRY_FORWARD_MAX_AGE_MS
+
         val hrAggregate = if (hrSamples.isNotEmpty()) {
             val hrValues = hrSamples.map { it.bpm }
             HrAggregate(
@@ -168,6 +206,14 @@ class SensorService : LifecycleService() {
                 min = hrValues.minOrNull() ?: 0,
                 max = hrValues.maxOrNull() ?: 0,
                 samples = hrValues.size
+            )
+        } else if (useCarryForwardHr) {
+            val carried = snapshot.lastKnownHr!!
+            HrAggregate(
+                mean = carried.toFloat(),
+                min = carried,
+                max = carried,
+                samples = 1
             )
         } else null
 
@@ -236,14 +282,19 @@ class SensorService : LifecycleService() {
             }
         }
 
-        val timestamp = System.currentTimeMillis()
-        val hrInfo = hrAggregate?.let { "HR=${it.mean.toInt()} (${it.samples})" } ?: "HR=none"
+        val hrInfo = if (useCarryForwardHr) {
+            "HR=${snapshot.lastKnownHr} (carry ${lastKnownHrAgeMs / 1000}s)"
+        } else {
+            hrAggregate?.let { "HR=${it.mean.toInt()} (${it.samples})" } ?: "HR=none"
+        }
         val hrvInfo = hrvAggregate?.let { "RMSSD=${it.rmssd.toInt()}ms" } ?: ""
         val edaInfo = edaAggregate?.let { "SCL=${it.meanScl}" } ?: ""
         val ppgInfo = ppgAggregate?.let { " PPG=${it.samples}samples" } ?: ""
         val accelInfo = accelAggregate?.let { " Stillness=${(it.stillness * 100).toInt()}%" } ?: ""
         val locInfo = locationAggregate?.let { " Loc=present ±${it.accuracy.toInt()}m" } ?: ""
-        Log.i(TAG, "Saving batch: $hrInfo, $hrvInfo, $edaInfo$ppgInfo$accelInfo$locInfo")
+        val hrDiagInfo =
+            " HRdiag(ok=${snapshot.acceptedHrCount},statusDrop=${snapshot.rejectedStatusCount},valueDrop=${snapshot.rejectedValueCount},lastStatus=${snapshot.lastRejectedStatus ?: "none"})"
+        Log.i(TAG, "Saving batch: $hrInfo, $hrvInfo, $edaInfo$ppgInfo$accelInfo$locInfo$hrDiagInfo")
 
         // Send location-enriched batch via WebSocket if connected,
         // then save to Room (without location — transient context only)
@@ -622,11 +673,27 @@ class SensorService : LifecycleService() {
                 try {
                     val hr = dp.getValue(ValueKey.HeartRateSet.HEART_RATE)
                     val hrStatus = dp.getValue(ValueKey.HeartRateSet.HEART_RATE_STATUS)
-                    if (hrStatus != 1) continue
+                    val statusAccepted =
+                        hrStatus == HR_STATUS_VALID || hrStatus == HR_STATUS_LOW_QUALITY
+                    val hrValueAccepted = hr in 30..220
+                    if (!statusAccepted || !hrValueAccepted) {
+                        synchronized(bufferLock) {
+                            if (!statusAccepted) {
+                                hrRejectedStatusCount++
+                                lastRejectedHrStatus = hrStatus
+                            } else {
+                                hrRejectedValueCount++
+                            }
+                        }
+                        continue
+                    }
 
                     // Buffer HR sample
                     synchronized(bufferLock) {
                         hrBuffer.add(HrSample(hr, now))
+                        hrAcceptedCount++
+                        lastValidHrBpm = hr
+                        lastValidHrTimestampMs = now
                     }
                     _heartRate.value = hr
 

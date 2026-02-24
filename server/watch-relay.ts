@@ -16,7 +16,12 @@ import { URL } from "url";
 import { networkInterfaces } from "os";
 import express from "express";
 import cors from "cors";
-import { initDatabase, closeDatabase, insertWatchBatch } from "./sensor-fusion/database";
+import {
+  initDatabase,
+  closeDatabase,
+  insertWatchBatch,
+  createSession,
+} from "./sensor-fusion/database";
 import { sensorFusionRouter } from "./sensor-fusion/routes";
 import { processPendingFusion } from "./sensor-fusion/fusion";
 
@@ -123,17 +128,38 @@ function startWatchHeartbeat(ws: WatchWebSocket) {
 
 // Active session tracking (set by browser when creating session)
 let activeSessionId: string | null = null;
+let activeSessionSource: "manual" | "auto" | null = null;
 
 /**
  * Set the active session ID for watch batch storage
  */
-export function setActiveSession(sessionId: string | null): void {
+export function setActiveSession(
+  sessionId: string | null,
+  source: "manual" | "auto" = "manual"
+): void {
   activeSessionId = sessionId;
+  activeSessionSource = sessionId ? source : null;
   if (sessionId) {
-    log(`Active session set: ${sessionId}`);
+    log(`Active session set: ${sessionId} (${source})`);
   } else {
     log("Active session cleared");
   }
+}
+
+/**
+ * Ensure there is an active session before storing watch data.
+ * If none is active, create an automatic session so streaming data
+ * is never silently dropped when browser session activation is missing.
+ */
+function ensureActiveSessionForWatchBatch(): string {
+  if (activeSessionId) return activeSessionId;
+
+  const autoSession = createSession({
+    device_name: watchDeviceName ?? "watch-auto",
+  });
+  setActiveSession(autoSession.id, "auto");
+  log(`Auto-created session for watch ingestion: ${autoSession.id}`);
+  return autoSession.id;
 }
 
 /**
@@ -166,21 +192,22 @@ function sendWatchStatus(connected: boolean) {
 function storeWatchBatch(msg: {
   windowStart: number;
   windowEnd: number;
+  windowMs?: number;
+  timestamp?: number;
   hr?: { mean?: number; min?: number; max?: number; samples?: number };
   hrv?: { rmssd?: number; sdnn?: number; samples?: number };
   eda?: { meanScl?: number; minScl?: number; maxScl?: number; samples?: number };
   location?: { latitude: number; longitude: number; accuracy: number };
 }): void {
-  if (!activeSessionId) {
-    logVerbose("No active session, skipping watch batch storage");
-    return;
-  }
-
   try {
+    const sessionId = ensureActiveSessionForWatchBatch();
+    const windowEnd = msg.windowEnd ?? msg.timestamp ?? Date.now();
+    const resolvedWindowMs = msg.windowMs ?? 30_000;
+    const windowStart = msg.windowStart ?? Math.max(0, windowEnd - resolvedWindowMs);
     insertWatchBatch({
-      session_id: activeSessionId,
-      window_start: msg.windowStart,
-      window_end: msg.windowEnd,
+      session_id: sessionId,
+      window_start: windowStart,
+      window_end: windowEnd,
       hr_mean: msg.hr?.mean ?? null,
       hr_min: msg.hr?.min ?? null,
       hr_max: msg.hr?.max ?? null,
@@ -198,11 +225,11 @@ function storeWatchBatch(msg: {
     });
 
     // Trigger fusion after storing watch batch
-    const fusedWindows = processPendingFusion(activeSessionId);
+    const fusedWindows = processPendingFusion(sessionId);
     if (fusedWindows.length > 0) {
       logVerbose(`Created ${fusedWindows.length} fused window(s)`);
     }
-    logVerbose(`Stored watch batch for session ${activeSessionId}`);
+    logVerbose(`Stored watch batch for session ${sessionId}`);
   } catch (err) {
     log(`Failed to store watch batch: ${err}`);
   }
@@ -234,7 +261,7 @@ app.get("/", (_req, res) => {
     `Watch Relay Server\n` +
       `Watch: ${watchClient ? "connected" : "disconnected"}${watchDeviceName ? ` (${watchDeviceName})` : ""}\n` +
       `Browsers: ${browserClients.size} connected\n` +
-      `Active Session: ${activeSessionId || "none"}\n` +
+      `Active Session: ${activeSessionId || "none"}${activeSessionSource ? ` (${activeSessionSource})` : ""}\n` +
       `\nAPI Endpoints:\n` +
       `  POST /api/sessions - Create session\n` +
       `  GET  /api/sessions - List sessions\n` +

@@ -28,3 +28,11 @@
 ## Part 5: Verification
 
 - [x] End-to-end smoke test: run agent with `--no-openclaw`, send fake batch data via `test-e2e.ts`, verify dynamic context fields appear in intervention-log.jsonl trigger data. Verify location is persisted in SQLite. Verify `focusTime` calendar events suppress interventions.
+
+## Part 6: Watch HR Streaming Stability (Ralph Loop)
+
+- [x] Add temporary HR diagnostics in watch batching logs to count accepted vs dropped HR samples per 30s window (status/value filtering visibility).
+- [x] Implement HR carry-forward fallback in `SensorService.flushBatch()` so if no new HR sample arrives but last valid HR is fresh (<=90s), batch emits fallback HR instead of `HR=none`.
+- [x] Keep strict freshness guard: do not carry-forward beyond 90s; preserve `HR=none` when stale.
+- [x] Build and deploy updated watch app (`:app:compileDebugKotlin`, `:app:installDebug`) and verify no compile/runtime regressions.
+- [x] Run live 2-3 minute ADB monitor and confirm stability criteria: (a) relay stays connected, (b) no more than 1 `HR=none` window over 2 minutes during normal wear.

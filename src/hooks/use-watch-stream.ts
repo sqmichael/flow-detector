@@ -183,6 +183,41 @@ export function useWatchStream(options?: WatchStreamOptions): UseWatchStreamRetu
         break;
       }
 
+      case "batch": {
+        const timestamp = msg.timestamp || Date.now();
+        const hrMean = msg.hr?.mean;
+        const hrvRmssd = msg.hrv?.rmssd;
+        const hrvSdnn = msg.hrv?.sdnn;
+        const edaMeanScl = msg.eda?.meanScl;
+
+        if (typeof hrMean === "number") {
+          lastHrTimestampRef.current = timestamp;
+        }
+        if (typeof edaMeanScl === "number") {
+          lastEdaTimestampRef.current = timestamp;
+        }
+
+        setState((prev) => ({
+          ...prev,
+          heartRate:
+            typeof hrMean === "number" && hrMean >= 30 && hrMean <= 220
+              ? Math.round(hrMean)
+              : prev.heartRate,
+          hrvMetrics:
+            typeof hrvRmssd === "number" && typeof hrvSdnn === "number"
+              ? {
+                  rmssd: hrvRmssd,
+                  sdnn: hrvSdnn,
+                  sampleCount: msg.hr?.samples ?? prev.hrvMetrics?.sampleCount ?? 0,
+                  timestamp,
+                }
+              : prev.hrvMetrics,
+          currentSCL: typeof edaMeanScl === "number" ? edaMeanScl : prev.currentSCL,
+          lastUpdate: timestamp,
+        }));
+        break;
+      }
+
       default:
         log("Unknown message type:", (msg as { type: string }).type);
     }
