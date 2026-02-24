@@ -208,7 +208,8 @@ export function useWatchStream(options?: WatchStreamOptions): UseWatchStreamRetu
               ? {
                   rmssd: hrvRmssd,
                   sdnn: hrvSdnn,
-                  sampleCount: msg.hr?.samples ?? prev.hrvMetrics?.sampleCount ?? 0,
+                  // Batch payload does not provide HRV sample count; preserve prior count.
+                  sampleCount: prev.hrvMetrics?.sampleCount ?? 0,
                   timestamp,
                 }
               : prev.hrvMetrics,

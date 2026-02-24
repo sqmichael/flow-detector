@@ -87,6 +87,11 @@ function cleanupWatchConnection(reason: string, ws?: WebSocket) {
     watchClient = null;
     watchDeviceName = null;
     sendWatchStatus(false);
+    // Auto-created sessions are scoped to a single watch connection window.
+    // Clearing on disconnect prevents unrelated reconnect periods from merging.
+    if (activeSessionSource === "auto") {
+      setActiveSession(null);
+    }
   }
 }
 

@@ -213,7 +213,8 @@ class SensorService : LifecycleService() {
                 mean = carried.toFloat(),
                 min = carried,
                 max = carried,
-                samples = 1
+                // Synthetic carry-forward value: do not count as observed HR sample.
+                samples = 0
             )
         } else null
 
