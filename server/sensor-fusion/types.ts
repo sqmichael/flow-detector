@@ -32,6 +32,7 @@ export interface EyeMetricsRow {
   average_ear: number;
   eye_flow_indicator: number;
   frame_count: number;
+  activity_tag: string | null;
   quality: number; // 0-1, based on frame_count vs expected
   created_at: number;
 }
@@ -45,6 +46,7 @@ export interface EyeMetricsInsert {
   average_ear: number;
   eye_flow_indicator: number;
   frame_count: number;
+  activity_tag?: string | null;
   quality?: number;
 }
 
@@ -55,6 +57,7 @@ export interface WatchBatchRow {
   session_id: string;
   window_start: number;
   window_end: number;
+  activity_tag: string | null;
   hr_mean: number | null;
   hr_min: number | null;
   hr_max: number | null;
@@ -91,6 +94,7 @@ export interface WatchBatchInsert {
   session_id: string;
   window_start: number;
   window_end: number;
+  activity_tag?: string | null;
   hr_mean?: number | null;
   hr_min?: number | null;
   hr_max?: number | null;
@@ -156,6 +160,7 @@ export interface FusedWindowRow {
   eye_gaze_stability: number | null;
   eye_average_ear: number | null;
   eye_flow_indicator: number | null;
+  activity_tag: string | null;
   eye_window_count: number; // How many 5s windows were aggregated
   eye_quality: number; // 0-1
   // Watch metrics (from single 30s batch)
@@ -182,6 +187,7 @@ export interface FusedWindowInsert {
   eye_gaze_stability?: number | null;
   eye_average_ear?: number | null;
   eye_flow_indicator?: number | null;
+  activity_tag?: string | null;
   eye_window_count?: number;
   eye_quality?: number;
   watch_hr_mean?: number | null;
@@ -246,6 +252,7 @@ export interface EyeMetricsRequest {
   average_ear: number;
   eye_flow_indicator: number;
   frame_count: number;
+  activity_tag?: string | null;
 }
 
 export interface TimeAlignedQuery {

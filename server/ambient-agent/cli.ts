@@ -124,6 +124,14 @@ async function preflight(): Promise<boolean> {
   // 4. Log path
   results.push({ name: "Log Path", status: "pass", message: DEFAULT_CONFIG.logPath });
 
+  // 5. ntfy endpoint health (without publishing a message)
+  const ntfyHealth = await checkNtfyHealth();
+  if (ntfyHealth.ok) {
+    results.push({ name: "ntfy", status: "pass", message: ntfyHealth.message });
+  } else {
+    results.push({ name: "ntfy", status: "warn", message: ntfyHealth.message });
+  }
+
   // Print results
   let hasFail = false;
   for (const r of results) {
@@ -134,6 +142,36 @@ async function preflight(): Promise<boolean> {
   console.log();
 
   return !hasFail;
+}
+
+async function checkNtfyHealth(): Promise<{ ok: boolean; message: string }> {
+  const baseUrl = (process.env.NTFY_BASE_URL || "https://ntfy.sh").replace(/\/+$/, "");
+  const topic = process.env.NTFY_TOPIC || "flow-detector-x7k9m2";
+  const token = process.env.NTFY_TOKEN;
+  const username = process.env.NTFY_USERNAME;
+  const password = process.env.NTFY_PASSWORD;
+
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  } else if (username && password) {
+    headers["Authorization"] =
+      `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(topic)}/json?poll=1`, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) {
+      return { ok: true, message: `${baseUrl}/${topic} reachable` };
+    }
+    return { ok: false, message: `${baseUrl}/${topic} returned ${res.status}` };
+  } catch (err) {
+    return { ok: false, message: `${baseUrl}/${topic} unreachable (${String(err)})` };
+  }
 }
 
 function checkRelay(): Promise<boolean> {

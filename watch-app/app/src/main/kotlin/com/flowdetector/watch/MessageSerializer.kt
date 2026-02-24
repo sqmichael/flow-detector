@@ -57,7 +57,8 @@ data class HrAggregate(
 @Serializable
 data class HrvAggregate(
     val rmssd: Float,
-    val sdnn: Float
+    val sdnn: Float,
+    val samples: Int
 )
 
 @Serializable

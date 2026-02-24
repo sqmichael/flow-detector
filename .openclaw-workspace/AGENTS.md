@@ -210,3 +210,8 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+## Website Reconstruction Reference
+If reconstructing websites, reference: `Done. Here's what's saved at /home/michael/tools/kimi-vision-builder/:`
+
+Primary path: `/home/michael/tools/kimi-vision-builder/`

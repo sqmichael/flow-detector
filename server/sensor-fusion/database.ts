@@ -73,6 +73,11 @@ function columnExists(db: Database.Database, table: string, column: string): boo
  * Run migrations to add new columns to existing tables
  */
 function runMigrations(db: Database.Database): void {
+  if (!columnExists(db, "eye_metrics", "activity_tag")) {
+    db.exec(`ALTER TABLE eye_metrics ADD COLUMN activity_tag TEXT;`);
+    console.log("[DB] Migration: Added activity_tag to eye_metrics");
+  }
+
   // Migration: Add PPG columns to watch_batches
   if (!columnExists(db, "watch_batches", "ppg_green_mean")) {
     db.exec(`
@@ -108,6 +113,11 @@ function runMigrations(db: Database.Database): void {
     console.log("[DB] Migration: Added location columns to watch_batches");
   }
 
+  if (!columnExists(db, "watch_batches", "activity_tag")) {
+    db.exec(`ALTER TABLE watch_batches ADD COLUMN activity_tag TEXT;`);
+    console.log("[DB] Migration: Added activity_tag to watch_batches");
+  }
+
   // Migration: Add stillness/motion columns to fused_windows
   if (!columnExists(db, "fused_windows", "watch_accel_stillness")) {
     db.exec(`
@@ -115,6 +125,11 @@ function runMigrations(db: Database.Database): void {
       ALTER TABLE fused_windows ADD COLUMN motion_quality REAL;
     `);
     console.log("[DB] Migration: Added stillness columns to fused_windows");
+  }
+
+  if (!columnExists(db, "fused_windows", "activity_tag")) {
+    db.exec(`ALTER TABLE fused_windows ADD COLUMN activity_tag TEXT;`);
+    console.log("[DB] Migration: Added activity_tag to fused_windows");
   }
 }
 
@@ -142,6 +157,7 @@ function createTables(db: Database.Database): void {
       average_ear REAL NOT NULL,
       eye_flow_indicator REAL NOT NULL,
       frame_count INTEGER NOT NULL,
+      activity_tag TEXT,
       quality REAL NOT NULL DEFAULT 1.0,
       created_at INTEGER NOT NULL,
       FOREIGN KEY (session_id) REFERENCES sessions(id)
@@ -157,6 +173,7 @@ function createTables(db: Database.Database): void {
       session_id TEXT NOT NULL,
       window_start INTEGER NOT NULL,
       window_end INTEGER NOT NULL,
+      activity_tag TEXT,
       hr_mean REAL,
       hr_min REAL,
       hr_max REAL,
@@ -201,6 +218,7 @@ function createTables(db: Database.Database): void {
       eye_gaze_stability REAL,
       eye_average_ear REAL,
       eye_flow_indicator REAL,
+      activity_tag TEXT,
       eye_window_count INTEGER NOT NULL DEFAULT 0,
       eye_quality REAL NOT NULL DEFAULT 0.0,
       watch_hr_mean REAL,
@@ -289,8 +307,8 @@ export function insertEyeMetrics(data: EyeMetricsInsert): EyeMetricsRow {
   const stmt = db.prepare(`
     INSERT INTO eye_metrics (
       session_id, window_start, window_end, blink_rate, gaze_stability,
-      average_ear, eye_flow_indicator, frame_count, quality, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      average_ear, eye_flow_indicator, frame_count, activity_tag, quality, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -302,6 +320,7 @@ export function insertEyeMetrics(data: EyeMetricsInsert): EyeMetricsRow {
     data.average_ear,
     data.eye_flow_indicator,
     data.frame_count,
+    data.activity_tag ?? null,
     quality,
     now
   );
@@ -316,6 +335,7 @@ export function insertEyeMetrics(data: EyeMetricsInsert): EyeMetricsRow {
     average_ear: data.average_ear,
     eye_flow_indicator: data.eye_flow_indicator,
     frame_count: data.frame_count,
+    activity_tag: data.activity_tag ?? null,
     quality,
     created_at: now,
   };
@@ -348,19 +368,20 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
 
   const stmt = db.prepare(`
     INSERT INTO watch_batches (
-      session_id, window_start, window_end, hr_mean, hr_min, hr_max, hr_samples,
+      session_id, window_start, window_end, activity_tag, hr_mean, hr_min, hr_max, hr_samples,
       hrv_rmssd, hrv_sdnn, hrv_samples, eda_mean_scl, eda_min_scl, eda_max_scl,
       eda_samples, ppg_green_mean, ppg_green_std, ppg_ir_mean, ppg_ir_std,
       ppg_red_mean, ppg_red_std, ppg_samples, accel_magnitude_mean,
       accel_magnitude_std, accel_stillness, accel_samples,
       location_lat, location_lon, location_accuracy, quality, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
     data.session_id,
     data.window_start,
     data.window_end,
+    data.activity_tag ?? null,
     data.hr_mean ?? null,
     data.hr_min ?? null,
     data.hr_max ?? null,
@@ -395,6 +416,7 @@ export function insertWatchBatch(data: WatchBatchInsert): WatchBatchRow {
     session_id: data.session_id,
     window_start: data.window_start,
     window_end: data.window_end,
+    activity_tag: data.activity_tag ?? null,
     hr_mean: data.hr_mean ?? null,
     hr_min: data.hr_min ?? null,
     hr_max: data.hr_max ?? null,
@@ -494,11 +516,11 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
   const stmt = db.prepare(`
     INSERT INTO fused_windows (
       session_id, window_start, window_end, eye_blink_rate, eye_gaze_stability,
-      eye_average_ear, eye_flow_indicator, eye_window_count, eye_quality,
+      eye_average_ear, eye_flow_indicator, activity_tag, eye_window_count, eye_quality,
       watch_hr_mean, watch_hr_min, watch_hr_max, watch_hrv_rmssd, watch_hrv_sdnn,
       watch_eda_mean_scl, watch_accel_stillness, watch_quality, combined_flow_score,
       motion_quality, tier, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const result = stmt.run(
@@ -509,6 +531,7 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
     data.eye_gaze_stability ?? null,
     data.eye_average_ear ?? null,
     data.eye_flow_indicator ?? null,
+    data.activity_tag ?? null,
     data.eye_window_count ?? 0,
     data.eye_quality ?? 0.0,
     data.watch_hr_mean ?? null,
@@ -534,6 +557,7 @@ export function insertFusedWindow(data: FusedWindowInsert): FusedWindowRow {
     eye_gaze_stability: data.eye_gaze_stability ?? null,
     eye_average_ear: data.eye_average_ear ?? null,
     eye_flow_indicator: data.eye_flow_indicator ?? null,
+    activity_tag: data.activity_tag ?? null,
     eye_window_count: data.eye_window_count ?? 0,
     eye_quality: data.eye_quality ?? 0.0,
     watch_hr_mean: data.watch_hr_mean ?? null,

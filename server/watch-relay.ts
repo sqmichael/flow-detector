@@ -21,6 +21,7 @@ import {
   closeDatabase,
   insertWatchBatch,
   createSession,
+  insertEvent,
 } from "./sensor-fusion/database";
 import { sensorFusionRouter } from "./sensor-fusion/routes";
 import { processPendingFusion } from "./sensor-fusion/fusion";
@@ -134,6 +135,7 @@ function startWatchHeartbeat(ws: WatchWebSocket) {
 // Active session tracking (set by browser when creating session)
 let activeSessionId: string | null = null;
 let activeSessionSource: "manual" | "auto" | null = null;
+let activeActivityTag: string | null = null;
 
 /**
  * Set the active session ID for watch batch storage
@@ -144,6 +146,9 @@ export function setActiveSession(
 ): void {
   activeSessionId = sessionId;
   activeSessionSource = sessionId ? source : null;
+  if (!sessionId) {
+    activeActivityTag = null;
+  }
   if (sessionId) {
     log(`Active session set: ${sessionId} (${source})`);
   } else {
@@ -213,6 +218,7 @@ function storeWatchBatch(msg: {
       session_id: sessionId,
       window_start: windowStart,
       window_end: windowEnd,
+      activity_tag: activeActivityTag,
       hr_mean: msg.hr?.mean ?? null,
       hr_min: msg.hr?.min ?? null,
       hr_max: msg.hr?.max ?? null,
@@ -260,6 +266,73 @@ app.post("/api/session/activate", (req, res) => {
   }
 });
 
+app.get("/api/activity", (_req, res) => {
+  res.json({
+    activity_tag: activeActivityTag,
+    session_id: activeSessionId,
+  });
+});
+
+app.post("/api/activity", (req, res) => {
+  const rawTag = typeof req.body?.tag === "string" ? req.body.tag.trim() : "";
+  const tag = rawTag.length > 0 ? rawTag.slice(0, 64) : null;
+  const sessionId =
+    typeof req.body?.session_id === "string" && req.body.session_id.length > 0
+      ? req.body.session_id
+      : activeSessionId;
+
+  activeActivityTag = tag;
+  log(`Activity tag set: ${activeActivityTag ?? "none"}`);
+
+  if (sessionId) {
+    try {
+      insertEvent({
+        session_id: sessionId,
+        timestamp: Date.now(),
+        event_type: "marker",
+        label: tag ? `activity:${tag}` : "activity:clear",
+        metadata: { kind: "activity", tag },
+      });
+    } catch (err) {
+      log(`Failed to persist activity tag event: ${err}`);
+    }
+  }
+
+  res.json({
+    ok: true,
+    activity_tag: activeActivityTag,
+    session_id: sessionId,
+  });
+});
+
+app.get("/api/activity/set/:tag", (req, res) => {
+  const rawTag = req.params.tag.trim();
+  const normalized = rawTag.toLowerCase();
+  const isClear = normalized === "clear" || normalized === "none" || normalized === "off";
+  const tag = !isClear && rawTag.length > 0 ? rawTag.slice(0, 64) : null;
+  const sessionId = activeSessionId;
+  activeActivityTag = tag;
+  log(`Activity tag set via GET: ${activeActivityTag ?? "none"}`);
+
+  if (sessionId) {
+    try {
+      insertEvent({
+        session_id: sessionId,
+        timestamp: Date.now(),
+        event_type: "marker",
+        label: tag ? `activity:${tag}` : "activity:clear",
+        metadata: { kind: "activity", tag },
+      });
+    } catch (err) {
+      log(`Failed to persist activity tag event: ${err}`);
+    }
+  }
+
+  res.type("text/plain").send(
+    `activity_tag=${activeActivityTag ?? "none"}\nsession_id=${sessionId ?? "none"}\n`
+  );
+});
+
 // Status endpoint
 app.get("/", (_req, res) => {
   res.type("text/plain").send(
@@ -267,6 +340,7 @@ app.get("/", (_req, res) => {
       `Watch: ${watchClient ? "connected" : "disconnected"}${watchDeviceName ? ` (${watchDeviceName})` : ""}\n` +
       `Browsers: ${browserClients.size} connected\n` +
       `Active Session: ${activeSessionId || "none"}${activeSessionSource ? ` (${activeSessionSource})` : ""}\n` +
+      `Activity Tag: ${activeActivityTag || "none"}\n` +
       `\nAPI Endpoints:\n` +
       `  POST /api/sessions - Create session\n` +
       `  GET  /api/sessions - List sessions\n` +

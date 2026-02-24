@@ -24,6 +24,13 @@ export interface HRVSample {
   timestamp: number;
 }
 
+interface StressSignalContext {
+  hrHistory?: SensorSample[];
+  currentSCL?: number | null;
+  baselineSCL?: number | null;
+  currentStillness?: number | null;
+}
+
 // ── Flow Detection (Behavior A) ─────────────────────────────────────
 
 /**
@@ -135,7 +142,8 @@ export function detectStressPattern(
   currentHRV: number | null,
   baseline: PersonalBaseline | null,
   elevationStartedAt: number | null,
-  config: StressDetectionConfig
+  config: StressDetectionConfig,
+  context: StressSignalContext = {}
 ): {
   isStressed: boolean;
   elevatedMinutes: number;
@@ -152,7 +160,8 @@ export function detectStressPattern(
 
   const hrElevated = isHRElevated(currentHR, baseline, config);
   const hrvSuppressed = isHRVSuppressed(currentHRV, baseline, config);
-  const isStressed = hrElevated && hrvSuppressed;
+  const corroborated = hasCorroboratingStressSignal(context);
+  const isStressed = hrElevated && hrvSuppressed && corroborated;
 
   // Calculate duration
   let elevatedMinutes = 0;
@@ -168,6 +177,47 @@ export function detectStressPattern(
     elevatedMinutes,
     shouldTriggerCheckin,
   };
+}
+
+function hasCorroboratingStressSignal(context: StressSignalContext): boolean {
+  const hrRising = hasRecentHRRise(context.hrHistory ?? []);
+  const edaElevated = isEDAElevated(context.currentSCL ?? null, context.baselineSCL ?? null);
+  const restless = isRestlessMotion(context.currentStillness ?? null);
+  return hrRising || edaElevated || restless;
+}
+
+function hasRecentHRRise(
+  samples: SensorSample[],
+  recentMs: number = 2 * 60 * 1000,
+  priorMs: number = 3 * 60 * 1000,
+  minRiseBpm: number = 4
+): boolean {
+  if (samples.length < 8) return false;
+  const now = Date.now();
+  const recentStart = now - recentMs;
+  const priorStart = recentStart - priorMs;
+
+  const recent = samples.filter((s) => s.timestamp >= recentStart);
+  const prior = samples.filter((s) => s.timestamp >= priorStart && s.timestamp < recentStart);
+
+  if (recent.length < 3 || prior.length < 3) return false;
+  const recentMean = recent.reduce((sum, s) => sum + s.hr, 0) / recent.length;
+  const priorMean = prior.reduce((sum, s) => sum + s.hr, 0) / prior.length;
+
+  return recentMean - priorMean >= minRiseBpm;
+}
+
+function isEDAElevated(currentSCL: number | null, baselineSCL: number | null): boolean {
+  if (currentSCL === null) return false;
+  if (baselineSCL !== null && baselineSCL > 0) {
+    return currentSCL > baselineSCL * 1.25;
+  }
+  return currentSCL >= 4.5;
+}
+
+function isRestlessMotion(stillness: number | null): boolean {
+  if (stillness === null) return false;
+  return stillness < 0.65;
 }
 
 // ── Recovery Detection (Behavior C) ─────────────────────────────────

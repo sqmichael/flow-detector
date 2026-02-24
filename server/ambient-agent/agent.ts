@@ -30,6 +30,13 @@ import {
   enableFocusMode,
   sendPushNotification,
 } from "./interventions";
+import {
+  decideTimingPolicy,
+  type TimingPolicyContext,
+  type TimingMode,
+  type TimingLocation,
+  type CalendarPressure,
+} from "./timing-policy";
 import { InterventionLogger, EnergyLogger, logGapEvent } from "./logger";
 import { decideIntervention, buildReasoningInput } from "./reasoning";
 import { queryOpenClaw, isInFallbackMode, getOpenClawStatus } from "./openclaw-bridge";
@@ -104,10 +111,61 @@ const GAP_CLEAR_THRESHOLD_MS = 5 * 60 * 1000; // 5 min — clear stale history
 const GAP_DEBOUNCE_MS = 5000; // 5s — ignore rapid flaps
 const WARMUP_BATCHES = 2; // 2 batches (~60s) before resuming detection
 const BACKFILL_MAX_AGE_MS = 60 * 60 * 1000; // 1 hr — discard old backfill
+const MESSAGE_DEDUPE_MIN_COOLDOWN_MS = 60 * 1000; // 60s
 const PROVISIONAL_BASELINE_MIN_HR_SAMPLES = 10;
 const STABLE_BASELINE_MIN_HR_SAMPLES = 30;
 
 type BaselineStage = "none" | "provisional" | "stable";
+type PushTimingGateDecision = {
+  messageNow: boolean;
+  reason: string;
+};
+
+const TIMING_MODES: ReadonlySet<TimingMode> = new Set(["focus", "meeting", "transit", "free"]);
+const TIMING_LOCATIONS: ReadonlySet<TimingLocation> = new Set(["home", "office", "transit", "other", "unknown"]);
+const CALENDAR_PRESSURES: ReadonlySet<CalendarPressure> = new Set(["low", "medium", "high"]);
+
+function parseTimingContext(raw: unknown): TimingPolicyContext | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+
+  if (typeof obj.can_message_now !== "boolean") return null;
+  if (typeof obj.current_mode !== "string" || !TIMING_MODES.has(obj.current_mode as TimingMode)) return null;
+  if (
+    obj.next_free_window_minutes !== null &&
+    (typeof obj.next_free_window_minutes !== "number" || Number.isNaN(obj.next_free_window_minutes))
+  ) {
+    return null;
+  }
+  if (typeof obj.location_type !== "string" || !TIMING_LOCATIONS.has(obj.location_type as TimingLocation)) return null;
+  if (
+    typeof obj.calendar_pressure !== "string" ||
+    !CALENDAR_PRESSURES.has(obj.calendar_pressure as CalendarPressure)
+  ) {
+    return null;
+  }
+
+  return {
+    canMessageNow: obj.can_message_now,
+    currentMode: obj.current_mode as TimingMode,
+    nextFreeWindowMinutes: obj.next_free_window_minutes as number | null,
+    locationType: obj.location_type as TimingLocation,
+    calendarPressure: obj.calendar_pressure as CalendarPressure,
+  };
+}
+
+export function evaluatePushTimingGate(raw: unknown): PushTimingGateDecision {
+  const context = parseTimingContext(raw);
+  if (!context) {
+    return { messageNow: false, reason: "bad_or_unknown_context" };
+  }
+
+  const decision = decideTimingPolicy(context);
+  return {
+    messageNow: decision.messageNow,
+    reason: decision.reason,
+  };
+}
 
 // ── Quiet Hours Check ───────────────────────────────────────────────
 
@@ -165,6 +223,9 @@ export class AmbientAgent {
 
   // Timestamp of the last batch that included a location field (ms)
   private lastLocationReceivedAt: number | null = null;
+  private lastDecisionWindowStart: number | null = null;
+  private lastDecisionWindowEnd: number | null = null;
+  private lastDecisionWindowMs: number = 30_000;
   private baselineStage: BaselineStage = "none";
   private baselineFilePath: string;
 
@@ -200,6 +261,7 @@ export class AmbientAgent {
       currentHR: null,
       currentHRV: null,
       currentSCL: null,
+      currentStillness: null,
       currentLocation: null,
       lastSensorUpdate: null,
       watchQuality: null,
@@ -577,6 +639,11 @@ export class AmbientAgent {
     const hasHR = msg.hr && msg.hr.samples > 0;
     const hasEDA = msg.eda && msg.eda.meanScl > 0;
     const hasLocation = !!msg.location;
+    const windowMs = Number.isFinite(msg.windowMs) && msg.windowMs > 0 ? msg.windowMs : 30_000;
+
+    this.lastDecisionWindowMs = windowMs;
+    this.lastDecisionWindowEnd = msg.timestamp;
+    this.lastDecisionWindowStart = Math.max(0, msg.timestamp - windowMs);
 
     // Always update timestamp — watch is alive even if HR is between bursts
     this.state.lastSensorUpdate = msg.timestamp;
@@ -596,14 +663,26 @@ export class AmbientAgent {
       }
     }
     if (msg.hrv && msg.hrv.rmssd > 0) {
-      this.state.currentHRV = msg.hrv.rmssd;
-      this.hrvHistory.push({ rmssd: msg.hrv.rmssd, timestamp: msg.timestamp });
-      if (this.hrvHistory.length > HRV_HISTORY_SIZE) {
-        this.hrvHistory.shift();
+      const hrvSamples = msg.hrv.samples ?? 0;
+      const hasReliableSampleCount = hrvSamples >= 8;
+      const rmssdPlausible = msg.hrv.rmssd >= 8 && msg.hrv.rmssd <= 220;
+      if (hasReliableSampleCount && rmssdPlausible) {
+        this.state.currentHRV = msg.hrv.rmssd;
+        this.hrvHistory.push({ rmssd: msg.hrv.rmssd, timestamp: msg.timestamp });
+        if (this.hrvHistory.length > HRV_HISTORY_SIZE) {
+          this.hrvHistory.shift();
+        }
+      } else {
+        this.log(
+          `[HRV] Ignoring low-confidence RMSSD=${msg.hrv.rmssd.toFixed(1)}ms (samples=${hrvSamples})`
+        );
       }
     }
     if (hasEDA) {
       this.state.currentSCL = msg.eda!.meanScl;
+    }
+    if (msg.accel && typeof msg.accel.stillness === "number") {
+      this.state.currentStillness = msg.accel.stillness;
     }
 
     // Location staleness: only update if present; null out if absent and >5min stale
@@ -683,16 +762,17 @@ export class AmbientAgent {
   // ── Heartbeat / Daily Summary ──────────────────────────────────────
 
   private startHeartbeat(): void {
-    // Send startup notification after 10 seconds
-    setTimeout(() => this.sendStartupPush(), 10000);
+    // Optional startup notification (disabled by default to reduce noise).
+    if (process.env.AGENT_STARTUP_PUSH === "1") {
+      setTimeout(() => this.sendStartupPush(), 10000);
+    }
 
     // Schedule daily summary at 9pm local time, then every 24h
     this.scheduleDailySummary();
   }
 
   private async sendStartupPush(): Promise<void> {
-    const watchStatus = this.state.isWatchConnected ? "connected" : "waiting";
-    const message = `Agent started. Watch: ${watchStatus}. Ready.`;
+    const message = "Agent started. Monitoring active.";
     await sendPushNotification("Agent Online", message, "low");
     this.log(`Startup push sent: ${message}`);
   }
@@ -905,7 +985,13 @@ export class AmbientAgent {
       this.state.currentHRV,
       this.state.baseline,
       this.state.stressDetection.elevationStartedAt,
-      this.config.stressDetection
+      this.config.stressDetection,
+      {
+        hrHistory: this.hrHistory,
+        currentSCL: this.state.currentSCL,
+        baselineSCL: this.state.baseline?.baselineSCL ?? null,
+        currentStillness: this.state.currentStillness,
+      }
     );
 
     if (stressDetection.isStressed && !this.state.stressDetection.isElevated) {
@@ -949,14 +1035,36 @@ export class AmbientAgent {
   private async processViaOpenClaw(): Promise<void> {
     // Fetch calendar context (best-effort, cached 2min)
     const calendar = await fetchCalendarContext(this.config.quietHours.timezoneOffset);
+    const context = buildOpenClawContext(
+      this.state,
+      this.state.baseline,
+      this.state.interventionsToday,
+      this.config.maxInterventionsPerDay,
+      this.config.quietHours.timezoneOffset,
+      calendar
+    );
+    const logSnapshot = async (
+      decision: unknown,
+      sent: boolean,
+      deferredUntil: string | null = null
+    ): Promise<void> => {
+      await this.logger.logDecisionSnapshot({
+        context,
+        decision,
+        sent,
+        deferred_until: deferredUntil,
+      });
+    };
 
     // Calendar-based code-side disqualifiers
     if (calendar?.inMeeting) {
       this.log(`[DQ] In meeting: "${calendar.currentMeeting}" — suppressing`);
+      await logSnapshot({ reason: "calendar_in_meeting" }, false);
       return;
     }
     if (calendar && calendar.minutesToNext !== null && calendar.minutesToNext < 5) {
       this.log(`[DQ] Meeting in ${calendar.minutesToNext} min — suppressing`);
+      await logSnapshot({ reason: "calendar_meeting_soon", minutesToNext: calendar.minutesToNext }, false);
       return;
     }
 
@@ -971,6 +1079,7 @@ export class AmbientAgent {
         await enableFocusMode();
       }
       this.log(`[DQ] Calendar Focus Time: "${focusEvent.summary}" — protecting`);
+      await logSnapshot({ reason: "calendar_focus_time", summary: focusEvent.summary }, false);
       return;
     }
 
@@ -980,22 +1089,15 @@ export class AmbientAgent {
     );
     if (oooEvent) {
       this.log(`[DQ] Out of Office: "${oooEvent.summary}" — suppressing`);
+      await logSnapshot({ reason: "calendar_out_of_office", summary: oooEvent.summary }, false);
       return;
     }
 
     if (calendar === null) {
       this.log("[DQ] Calendar unavailable — being conservative");
+      await logSnapshot({ reason: "calendar_unavailable" }, false);
       return;
     }
-
-    const context = buildOpenClawContext(
-      this.state,
-      this.state.baseline,
-      this.state.interventionsToday,
-      this.config.maxInterventionsPerDay,
-      this.config.quietHours.timezoneOffset,
-      calendar
-    );
 
     const message = buildOpenClawDecisionPrompt(context);
 
@@ -1007,26 +1109,35 @@ export class AmbientAgent {
     this.log(`[OpenClaw] Response: ${response.reasoning}`);
 
     if (!response.shouldIntervene || response.actions.length === 0) {
+      await logSnapshot(response, false);
       return;
     }
 
     // Idempotency check
     if (response.decisionId && this.executedDecisions.has(response.decisionId)) {
       this.log(`[OpenClaw] Skipping duplicate decision: ${response.decisionId}`);
+      await logSnapshot(response, false);
       return;
     }
 
-    await this.executeOpenClawActions(response);
+    const execution = await this.executeOpenClawActions(response);
 
     if (response.decisionId) {
       this.executedDecisions.add(response.decisionId);
     }
+    await logSnapshot(response, execution.sent, execution.deferredUntil);
   }
 
   /**
    * Execute OpenClaw action plan by mapping action types to existing intervention functions
    */
-  private async executeOpenClawActions(response: OpenClawResponse): Promise<void> {
+  private async executeOpenClawActions(response: OpenClawResponse): Promise<{
+    sent: boolean;
+    deferredUntil: string | null;
+  }> {
+    let sent = false;
+    let deferredUntil: string | null = null;
+
     for (const action of response.actions) {
       this.log(`[OpenClaw] Executing action: ${action.type}`);
 
@@ -1045,6 +1156,7 @@ export class AmbientAgent {
             this.state.interventionsToday.push(intervention);
             await this.logger.logIntervention(intervention);
             await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+            sent = true;
           }
           break;
         }
@@ -1054,6 +1166,7 @@ export class AmbientAgent {
             this.state.flowProtection.inFlowMode = false;
             this.state.flowProtection.flowModeStartedAt = null;
             await disableFocusMode();
+            sent = true;
           }
           break;
         }
@@ -1061,10 +1174,39 @@ export class AmbientAgent {
         case "send_haptic": {
           const { sendWatchHaptic } = await import("./interventions");
           await sendWatchHaptic(this.ws, action.pattern || "gentle");
+          sent = true;
           break;
         }
 
         case "send_push": {
+          const actionWithTiming = action as OpenClawAction & { timing_policy?: unknown };
+          const responseWithTiming = response as OpenClawResponse & { timing_policy?: unknown };
+          const timingGate = evaluatePushTimingGate(
+            actionWithTiming.timing_policy ?? responseWithTiming.timing_policy ?? null
+          );
+          if (!timingGate.messageNow) {
+            this.log(`[OpenClaw] Skipping send_push: message_now=false (${timingGate.reason})`);
+            const timingContext = parseTimingContext(
+              actionWithTiming.timing_policy ?? responseWithTiming.timing_policy ?? null
+            );
+            if (
+              timingContext?.nextFreeWindowMinutes !== null &&
+              typeof timingContext?.nextFreeWindowMinutes === "number" &&
+              timingContext.nextFreeWindowMinutes > 0
+            ) {
+              deferredUntil = new Date(
+                Date.now() + timingContext.nextFreeWindowMinutes * 60 * 1000
+              ).toISOString();
+            }
+            break;
+          }
+
+          const messageGuard = this.getMessageGuardDecision("proactive_checkin");
+          if (messageGuard.skip) {
+            this.log(`[OpenClaw] Skipping send_push: ${messageGuard.reason}`);
+            break;
+          }
+
           const msg = action.message || "Checking in";
           const intervention = createIntervention("proactive_checkin", response.reasoning, {
             hr: this.state.currentHR ?? undefined,
@@ -1076,6 +1218,7 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          sent = true;
           break;
         }
 
@@ -1090,6 +1233,7 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await triggerPhoneCall(this.config.phoneNumber, "stress_check_in", action.message);
+          sent = true;
           break;
         }
 
@@ -1104,6 +1248,7 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          sent = true;
           break;
         }
 
@@ -1111,6 +1256,40 @@ export class AmbientAgent {
           break;
       }
     }
+
+    return { sent, deferredUntil };
+  }
+
+  private getMessageGuardDecision(type: Intervention["type"]): { skip: boolean; reason: string } {
+    const lastOfType = [...this.state.interventionsToday]
+      .reverse()
+      .find((entry) => entry.type === type);
+
+    if (!lastOfType) {
+      return { skip: false, reason: "no_prior_message" };
+    }
+
+    const windowMs = this.lastDecisionWindowMs;
+    const cooldownMs = Math.max(windowMs * 2, MESSAGE_DEDUPE_MIN_COOLDOWN_MS);
+    const now = Date.now();
+    const withinCooldown = now - lastOfType.triggeredAt < cooldownMs;
+
+    const hasDecisionWindow =
+      this.lastDecisionWindowStart !== null && this.lastDecisionWindowEnd !== null;
+    if (hasDecisionWindow) {
+      const sameWindow =
+        lastOfType.triggeredAt >= this.lastDecisionWindowStart! &&
+        lastOfType.triggeredAt <= this.lastDecisionWindowEnd! + windowMs;
+      if (sameWindow) {
+        return { skip: true, reason: "duplicate_decision_window" };
+      }
+    }
+
+    if (withinCooldown) {
+      return { skip: true, reason: "message_cooldown_active" };
+    }
+
+    return { skip: false, reason: "clear" };
   }
 
   // ── Fallback: reasoning.ts Path (original behavior) ────────────

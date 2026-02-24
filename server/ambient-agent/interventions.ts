@@ -20,7 +20,15 @@ const execAsync = promisify(exec);
 // ── ntfy.sh Push Notifications ───────────────────────────────────────
 
 const NTFY_TOPIC = process.env.NTFY_TOPIC || "flow-detector-x7k9m2";
-const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
+const NTFY_BASE_URL = (process.env.NTFY_BASE_URL || "https://ntfy.sh").replace(/\/+$/, "");
+const NTFY_URL = `${NTFY_BASE_URL}/${encodeURIComponent(NTFY_TOPIC)}`;
+const NTFY_TOKEN = process.env.NTFY_TOKEN;
+const NTFY_USERNAME = process.env.NTFY_USERNAME;
+const NTFY_PASSWORD = process.env.NTFY_PASSWORD;
+
+const NTFY_TIMEOUT_MS = 8000;
+const NTFY_MAX_RETRIES = 3;
+const NTFY_RETRY_DELAYS_MS = [500, 1500];
 
 /**
  * Detect the best reachable URL for the rating server.
@@ -71,40 +79,98 @@ export async function sendPushNotification(
   priority: "low" | "default" | "high" = "default",
   interventionId?: string
 ): Promise<boolean> {
-  try {
-    const headers: Record<string, string> = {
-      "Title": title,
-      "Priority": priority === "high" ? "high" : priority === "low" ? "low" : "default",
-      "Tags": "heart,wave",
-    };
+  const baseHeaders: Record<string, string> = {
+    "Title": title,
+    "Priority": priority === "high" ? "high" : priority === "low" ? "low" : "default",
+    "Tags": "heart,wave",
+    "User-Agent": "flow-detector/ambient-agent",
+  };
 
-    // Add rating buttons if intervention ID provided
-    // Note: Button labels must be ASCII-only for HTTP headers
-    if (interventionId) {
-      headers["Actions"] = [
-        `http, Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
-        `http, Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
-        `http, Intrusive, ${RATING_SERVER}/rate/${interventionId}/bad, method=POST`,
-      ].join("; ");
-    }
-
-    const response = await fetch(NTFY_URL, {
-      method: "POST",
-      headers,
-      body: message,
-    });
-
-    if (response.ok) {
-      console.log(`[Interventions] Push sent: ${title}`);
-      return true;
-    } else {
-      console.log(`[Interventions] Push failed: ${response.status}`);
-      return false;
-    }
-  } catch (error) {
-    console.log(`[Interventions] Push error: ${error}`);
-    return false;
+  // Add rating buttons if intervention ID provided
+  // Note: Button labels must be ASCII-only for HTTP headers
+  if (interventionId) {
+    baseHeaders["Actions"] = [
+      `http, Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
+      `http, Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
+      `http, Intrusive, ${RATING_SERVER}/rate/${interventionId}/bad, method=POST`,
+    ].join("; ");
   }
+
+  // Auth headers for private ntfy servers
+  if (NTFY_TOKEN) {
+    baseHeaders["Authorization"] = `Bearer ${NTFY_TOKEN}`;
+  } else if (NTFY_USERNAME && NTFY_PASSWORD) {
+    baseHeaders["Authorization"] =
+      `Basic ${Buffer.from(`${NTFY_USERNAME}:${NTFY_PASSWORD}`).toString("base64")}`;
+  }
+
+  for (let attempt = 1; attempt <= NTFY_MAX_RETRIES; attempt++) {
+    try {
+      // Attempt A: publish directly to /<topic>
+      let response = await fetchWithTimeout(NTFY_URL, {
+        method: "POST",
+        headers: baseHeaders,
+        body: message,
+      }, NTFY_TIMEOUT_MS);
+
+      // Attempt B (fallback): publish to root with Topic header
+      if (!response.ok) {
+        response = await fetchWithTimeout(NTFY_BASE_URL, {
+          method: "POST",
+          headers: { ...baseHeaders, "Topic": NTFY_TOPIC },
+          body: message,
+        }, NTFY_TIMEOUT_MS);
+      }
+
+      if (response.ok) {
+        console.log(`[Interventions] Push sent: ${title}`);
+        return true;
+      }
+
+      const errorText = await safeReadText(response);
+      console.log(
+        `[Interventions] Push failed (attempt ${attempt}/${NTFY_MAX_RETRIES}): ` +
+        `${response.status} ${response.statusText}${errorText ? ` - ${errorText}` : ""}`
+      );
+    } catch (error) {
+      console.log(
+        `[Interventions] Push error (attempt ${attempt}/${NTFY_MAX_RETRIES}): ${String(error)}`
+      );
+    }
+
+    if (attempt < NTFY_MAX_RETRIES) {
+      await sleep(NTFY_RETRY_DELAYS_MS[attempt - 1] ?? NTFY_RETRY_DELAYS_MS[NTFY_RETRY_DELAYS_MS.length - 1]);
+    }
+  }
+
+  return false;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function safeReadText(response: Response): Promise<string> {
+  try {
+    const text = await response.text();
+    return text.trim().slice(0, 200);
+  } catch {
+    return "";
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Focus Mode Control (macOS) ──────────────────────────────────────

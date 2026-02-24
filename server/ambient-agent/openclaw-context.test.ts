@@ -127,6 +127,7 @@ function makeState(overrides: Partial<AmbientAgentState> = {}): AmbientAgentStat
     currentHR: 65,
     currentHRV: 40,
     currentSCL: null,
+    currentStillness: null,
     currentLocation: null,
     lastSensorUpdate: NOW_MS,
     watchQuality: null,

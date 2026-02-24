@@ -29,6 +29,16 @@ export interface DailySummary {
   condition: "sensor_triggered" | "fixed_time";
 }
 
+export interface DecisionSnapshotLogEntry {
+  timestamp: number;
+  date: string;
+  type: "decision_snapshot";
+  context: unknown;
+  decision: unknown;
+  sent: boolean;
+  deferred_until: string | null;
+}
+
 // ── Logger Class ────────────────────────────────────────────────────
 
 export class InterventionLogger {
@@ -69,6 +79,31 @@ export class InterventionLogger {
     await appendFile(this.logPath, line);
 
     console.log(`[Logger] Intervention logged: ${intervention.type}`);
+  }
+
+  /**
+   * Log one decision-cycle snapshot for offline debugging.
+   */
+  async logDecisionSnapshot(snapshot: {
+    context: unknown;
+    decision: unknown;
+    sent: boolean;
+    deferred_until: string | null;
+  }): Promise<void> {
+    await this.ensureFile();
+
+    const entry: DecisionSnapshotLogEntry = {
+      timestamp: Date.now(),
+      date: new Date().toISOString().split("T")[0],
+      type: "decision_snapshot",
+      context: snapshot.context,
+      decision: snapshot.decision,
+      sent: snapshot.sent,
+      deferred_until: snapshot.deferred_until,
+    };
+
+    const line = JSON.stringify(entry) + "\n";
+    await appendFile(this.logPath, line);
   }
 
   /**

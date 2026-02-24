@@ -75,6 +75,26 @@ Avoid bikeshedding.
 Prefer clear fixes over long explanations.
 When in doubt, block only if there is real risk.
 
+## Response Format Requirement
+
+For every code implementation response, use this order:
+
+1. **Execution Decision (required)**
+   - `Mode:` solo | parallel-tools | collaboration
+   - `Model/Reasoning Decision:` concise statement of why this path was chosen
+   - `Rationale:` concrete tradeoff (speed, safety, confidence, scope, risk)
+2. **PM Brief (plain English, 2-4 lines max)**  
+   Explain what changed, why it matters for the real user/workflow, and any product tradeoff.
+3. **Technical Detail**  
+   Then provide files changed, implementation notes, risks, and test/verification status.
+
+Rules:
+- Do not omit the `Execution Decision` section on substantive responses (implementation, debugging, review, planning, or status updates).
+- Keep decision lines short and concrete; no vague statements.
+- The PM Brief must avoid jargon and be understandable by a non-engineer.
+- Do not skip the PM Brief, even for small implementation updates.
+- If blocked, state product impact first, then technical blocker.
+
 ---
 
 ## UX Review (Cross-Check Layer)
@@ -109,3 +129,8 @@ Before approving, answer:
 The user wants to stay in flow. Everything else is secondary.
 
 See `UX_PRINCIPLES.md` for detailed checklist and `UX_AGENT.md` for verification process.
+
+## Website Reconstruction Reference
+If reconstructing websites, reference: `Done. Here's what's saved at /home/michael/tools/kimi-vision-builder/:`
+
+Primary path: `/home/michael/tools/kimi-vision-builder/`

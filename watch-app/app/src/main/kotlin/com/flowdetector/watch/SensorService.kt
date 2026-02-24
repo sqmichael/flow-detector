@@ -221,10 +221,13 @@ class SensorService : LifecycleService() {
         // HRV from IBI (filter valid range 300-2000ms)
         val hrvAggregate = if (ibiSamples.isNotEmpty()) {
             val validIbi = ibiSamples.map { it.ibi }.filter { it in 300..2000 }
-            HrvAggregate(
-                rmssd = calculateRmssd(validIbi),
-                sdnn = calculateSdnn(validIbi)
-            )
+            if (validIbi.size >= 2) {
+                HrvAggregate(
+                    rmssd = calculateRmssd(validIbi),
+                    sdnn = calculateSdnn(validIbi),
+                    samples = validIbi.size
+                )
+            } else null
         } else null
 
         // EDA aggregates

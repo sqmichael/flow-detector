@@ -3,32 +3,53 @@
 ## User Context
 | Question | Answer |
 |----------|--------|
-| Who is the user? | Core maintainer/contributor working quickly across watch, server, and dashboard code. |
-| What's their environment? | Local dev workflow in a mixed TypeScript + Kotlin repo with many historical docs. |
-| How do they solve this today? | Open multiple markdown files and infer current state manually. |
-| How often do they need this? | Every coding session and handoff. |
-| What constraints exist? | Must preserve historical context while making current docs discoverable and accurate. |
+| Who is the user? | Solo operator exploring what assistant behavior is genuinely useful. |
+| What's their environment? | Production relay + local/dev agent workflow with ntfy as primary interaction surface. |
+| How do they solve this today? | Receive mixed notifications with uncertain timing quality. |
+| How often do they need this? | Continuously during workdays. |
+| What constraints exist? | Avoid broad assistant scope; prove one useful decision loop first. |
 
 ## Solution Assumptions
-1. A root `README.md` plus a docs index materially reduces onboarding and navigation friction.
-2. Marking superseded docs explicitly prevents wrong implementation choices.
-3. The highest value is aligning architecture/setup docs to the code that actually runs today.
-4. Existing docs should be reorganized by status (current/active/historical), not deleted.
-5. A lightweight consistency pass (paths/commands) is enough for this iteration.
+1. A minimal context contract can improve notification timing without adding broad AI behavior.
+2. Useful first loop is binary: `send_now` vs `delay`.
+3. Decision quality improves when context includes only timing-critical fields.
+4. Every decision needs a persisted snapshot for later usefulness scoring.
+5. If timing quality does not improve, the loop should be rolled back quickly.
 
 ## Riskiest Assumption
-Assumption 1 is riskiest: if contributors still cannot quickly find the right doc, cleanup effort has low impact.
+Assumption 1 is riskiest: context injection may add complexity without improving timing.
 
 ## Validation Test
-- **Test:** Verify new docs provide direct entry points and that referenced key files/commands exist.
-- **Pass:** New contributor can start from `README.md` and reach current architecture + setup docs without ambiguity.
-- **Fail:** Entry docs still point to stale paths/flows or require deep manual discovery.
+- **Test:** Compare mistimed notification rate before/after loop.
+- **Pass:** Mistimed rate decreases and user acknowledges better timing.
+- **Fail:** No measurable improvement or increased noise.
 
 ## Result
-- [x] PASS — proceed
+- [ ] PASS — proceed
 - [ ] FAIL — stop and reassess
 - [ ] UNTESTABLE — document why, proceed with caution
 
 ## Unknowns Remaining
-- Whether additional archived docs should be collapsed further after real contributor feedback.
-- Whether call-service setup should be split into quickstart vs production guides.
+- Which context fields materially improve timing for this user.
+- Whether `protect/reflect/reset` message set is sufficient for v1.
+
+## Targeted Assumptions By Item
+
+### Item 1-2: No-Calendar Safety + Policy Tightening
+- Calendar data may be unavailable for long periods; timing behavior must remain safe without it.
+- Missing calendar context should bias toward delay, not send.
+- Unknown location should remain a delay signal until proven otherwise.
+
+### Item 3: Feedback Capture
+- User is willing to provide lightweight binary feedback (`good` / `bad`) occasionally.
+- ntfy is the primary feedback surface; no dashboard dependency is required.
+- Feedback can be optional (`null`) without breaking decision logging.
+
+### Item 4: Scoring With Feedback
+- User-rated timing quality is a better primary metric than policy-only proxy scoring.
+- Rule-based mistimed scoring remains useful as a fallback/secondary metric.
+- Small sample sizes will occur; summaries must tolerate sparse feedback.
+
+### Item 5: Calendar Enrichment
+- Calendar integration should improve timing confidence but never be required for runtime correctness.
+- Stale/unavailable calendar data must be treated as unknown and handled safely.

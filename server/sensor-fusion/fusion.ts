@@ -30,6 +30,7 @@ function aggregateEyeMetrics(windows: EyeMetricsRow[]): {
   gaze_stability: number | null;
   average_ear: number | null;
   eye_flow_indicator: number | null;
+  activity_tag: string | null;
   window_count: number;
   quality: number;
 } {
@@ -39,6 +40,7 @@ function aggregateEyeMetrics(windows: EyeMetricsRow[]): {
       gaze_stability: null,
       average_ear: null,
       eye_flow_indicator: null,
+      activity_tag: null,
       window_count: 0,
       quality: 0,
     };
@@ -50,6 +52,7 @@ function aggregateEyeMetrics(windows: EyeMetricsRow[]): {
   let weightedGazeStability = 0;
   let weightedEAR = 0;
   let weightedFlowIndicator = 0;
+  const activityWeights = new Map<string, number>();
 
   for (const w of windows) {
     totalFrames += w.frame_count;
@@ -57,17 +60,34 @@ function aggregateEyeMetrics(windows: EyeMetricsRow[]): {
     weightedGazeStability += w.gaze_stability * w.frame_count;
     weightedEAR += w.average_ear * w.frame_count;
     weightedFlowIndicator += w.eye_flow_indicator * w.frame_count;
+    if (w.activity_tag) {
+      const prev = activityWeights.get(w.activity_tag) ?? 0;
+      activityWeights.set(w.activity_tag, prev + w.frame_count);
+    }
   }
 
   // Expected 6 windows per 30s, quality based on coverage
   const expectedWindows = 6;
   const quality = Math.min(1.0, windows.length / expectedWindows);
 
+  const dominantActivity = (() => {
+    let bestTag: string | null = null;
+    let bestWeight = -1;
+    for (const [tag, weight] of activityWeights.entries()) {
+      if (weight > bestWeight) {
+        bestWeight = weight;
+        bestTag = tag;
+      }
+    }
+    return bestTag;
+  })();
+
   return {
     blink_rate: totalFrames > 0 ? weightedBlinkRate / totalFrames : null,
     gaze_stability: totalFrames > 0 ? weightedGazeStability / totalFrames : null,
     average_ear: totalFrames > 0 ? weightedEAR / totalFrames : null,
     eye_flow_indicator: totalFrames > 0 ? weightedFlowIndicator / totalFrames : null,
+    activity_tag: dominantActivity,
     window_count: windows.length,
     quality,
   };
@@ -234,6 +254,7 @@ export function createFusedWindow(
     eye_gaze_stability: eyeAgg.gaze_stability,
     eye_average_ear: eyeAgg.average_ear,
     eye_flow_indicator: eyeAgg.eye_flow_indicator,
+    activity_tag: eyeAgg.activity_tag ?? watch?.activity_tag ?? null,
     eye_window_count: eyeAgg.window_count,
     eye_quality: eyeAgg.quality,
     watch_hr_mean: watch?.hr_mean ?? null,

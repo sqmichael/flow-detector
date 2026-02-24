@@ -1,9 +1,26 @@
 # Tasks
-- [x] Add v1 context/decision contract types in `server/ambient-agent/types.ts` (`TimingContextV1`, `TimingDecisionV1`) with strict enums and null-safe defaults.
-- [x] Implement deterministic timing policy in `server/ambient-agent/timing-policy.ts` with binary output (`message_now` vs `delay`) and bounded message taxonomy (`protect|reflect|reset|none`).
-- [x] Add unit tests for timing policy edge cases (meeting, transit, no-free-window, unknown location, high calendar pressure).
-- [x] Integrate timing policy into `server/ambient-agent/agent.ts` before `sendPushNotification`, with fail-safe default `message_now=false` on bad/unknown context.
-- [x] Add decision snapshot logging in `server/ambient-agent/logger.ts` for every decision cycle (`context`, `decision`, `sent`, `deferred_until`).
-- [x] Add dedupe/cooldown guard in agent messaging path to prevent restart-induced duplicate sends for same decision window.
-- [x] Add a replay/scoring script `server/ambient-agent/eval/timing-score.ts` to compute mistimed rate from logged decisions.
-- [x] Document runbook in `.ralph/feature/current/SHIP.md`: env vars, how to run policy in shadow mode, and go/no-go metrics after 3-5 days.
+- [ ] Add helper in `server/ambient-agent/agent.ts` to detect missing calendar context for timing decisions.
+- [ ] Set `next_free_window_minutes` to `null` in timing context when calendar data is missing.
+- [ ] Map missing calendar context to delay-safe pressure handling in timing context generation.
+- [ ] Add a unit test for missing-calendar timing context behavior in `server/ambient-agent/agent-timing-policy.test.ts`.
+- [ ] Add explicit `calendar_missing` delay reason handling in `server/ambient-agent/timing-policy.ts`.
+- [ ] Keep explicit `unknown_location` delay reason handling in `server/ambient-agent/timing-policy.ts` for missing location context.
+- [ ] Add a timing-policy test for `calendar_missing` reason output in `server/ambient-agent/timing-policy.test.ts`.
+- [ ] Add a timing-policy test for `unknown_location` reason output in `server/ambient-agent/timing-policy.test.ts`.
+- [ ] Add `message_id` to decision snapshot schema in `server/ambient-agent/logger.ts`.
+- [ ] Add `sent_at` to decision snapshot schema in `server/ambient-agent/logger.ts`.
+- [ ] Add `decision_reason` to decision snapshot schema in `server/ambient-agent/logger.ts`.
+- [ ] Add `feedback` to decision snapshot schema in `server/ambient-agent/logger.ts`.
+- [ ] Populate `message_id` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
+- [ ] Populate `sent_at` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
+- [ ] Populate `decision_reason` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
+- [ ] Populate `feedback` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
+- [ ] Add ntfy-compatible feedback identifiers for push messages in `server/ambient-agent/interventions.ts`.
+- [ ] Add feedback parsing path that records `feedback` as `null|good|bad` for logged push decisions.
+- [ ] Add feedback-aware mistimed scoring in `server/ambient-agent/eval/timing-score.ts` as the primary rate.
+- [ ] Keep rule-based mistimed scoring as a secondary metric in `server/ambient-agent/eval/timing-score.ts`.
+- [ ] Add scorer test coverage for feedback-present entries in `server/ambient-agent/eval/timing-score.test.ts`.
+- [ ] Add scorer test coverage for feedback-missing entries in `server/ambient-agent/eval/timing-score.test.ts`.
+- [ ] Populate `calendar_pressure` from calendar integration when calendar data is available.
+- [ ] Populate `next_free_window_minutes` from calendar integration when calendar data is available.
+- [ ] Add a test that confirms safe behavior when calendar integration is disconnected.

@@ -101,6 +101,7 @@ sensorFusionRouter.post("/sensors/eye", (req: Request, res: Response) => {
       average_ear: body.average_ear,
       eye_flow_indicator: body.eye_flow_indicator,
       frame_count: body.frame_count,
+      activity_tag: body.activity_tag ?? null,
     });
 
     res.json({ id: row.id, quality: row.quality });

@@ -193,6 +193,7 @@ export interface AmbientAgentState {
   currentHR: number | null;
   currentHRV: number | null;
   currentSCL: number | null;
+  currentStillness: number | null;
   currentLocation: { latitude: number; longitude: number; accuracy: number } | null;
   lastSensorUpdate: number | null;
   /** Watch signal quality (0-100, null if unknown) */
@@ -261,7 +262,7 @@ export interface AmbientAgentConfig {
 // ── Default Configuration ───────────────────────────────────────────
 
 export const DEFAULT_CONFIG: AmbientAgentConfig = {
-  relayUrl: process.env.RELAY_URL || "ws://production-server:8765/browser",
+  relayUrl: process.env.RELAY_URL || "ws://localhost:8765/browser",
 
   flowDetection: {
     stillnessMinutes: 30,
@@ -368,6 +369,161 @@ export interface OpenClawResponse {
   decisionId?: string;
 }
 
+// ── Timing Contract v1 ─────────────────────────────────────────────
+
+export const TIMING_CONTEXT_V1_VERSION = "v1" as const;
+export const TIMING_DECISION_V1_VERSION = "v1" as const;
+
+export const TIMING_CONTEXT_V1_TRIGGER_TYPES = [
+  "flow",
+  "stress",
+  "recovery",
+] as const;
+export type TimingContextV1TriggerType =
+  (typeof TIMING_CONTEXT_V1_TRIGGER_TYPES)[number];
+
+export const TIMING_CONTEXT_V1_CONFIDENCE_LEVELS = [
+  "low",
+  "medium",
+  "high",
+] as const;
+export type TimingContextV1Confidence =
+  (typeof TIMING_CONTEXT_V1_CONFIDENCE_LEVELS)[number];
+
+export const TIMING_CONTEXT_V1_DAY_PARTS = [
+  "morning",
+  "lunch",
+  "afternoon_work",
+  "evening",
+  "night",
+] as const;
+export type TimingContextV1DayPart =
+  (typeof TIMING_CONTEXT_V1_DAY_PARTS)[number];
+
+export const TIMING_CONTEXT_V1_WATCH_QUALITY = [
+  "good",
+  "bad",
+  "unknown",
+] as const;
+export type TimingContextV1WatchQuality =
+  (typeof TIMING_CONTEXT_V1_WATCH_QUALITY)[number];
+
+export const TIMING_CONTEXT_V1_ENERGY_STATES = [
+  "normal",
+  "low",
+  "high",
+] as const;
+export type TimingContextV1Energy =
+  (typeof TIMING_CONTEXT_V1_ENERGY_STATES)[number];
+
+export const TIMING_CONTEXT_V1_LOCATION_STATES = [
+  "available",
+  "unavailable",
+] as const;
+export type TimingContextV1Location =
+  (typeof TIMING_CONTEXT_V1_LOCATION_STATES)[number];
+
+export interface TimingContextV1 {
+  version: typeof TIMING_CONTEXT_V1_VERSION;
+  trigger: {
+    type: TimingContextV1TriggerType;
+    confidence: TimingContextV1Confidence;
+  };
+  sensors: {
+    hr: number | null;
+    hrv: number | null;
+    scl: number | null;
+    watchQuality: TimingContextV1WatchQuality;
+    dataAgeSec: number | null;
+    location: TimingContextV1Location;
+  };
+  timing: {
+    dayPart: TimingContextV1DayPart;
+    interventionsToday: number;
+    maxInterventions: number;
+    lastInterventionHoursAgo: number | null;
+    inMeeting: boolean | null;
+    minutesToNextEvent: number | null;
+  };
+  detections: {
+    energy: TimingContextV1Energy;
+    inFlowMode: boolean;
+    stressElevated: boolean;
+    recoveryDetected: boolean;
+  };
+}
+
+export const DEFAULT_TIMING_CONTEXT_V1: TimingContextV1 = {
+  version: TIMING_CONTEXT_V1_VERSION,
+  trigger: {
+    type: "flow",
+    confidence: "low",
+  },
+  sensors: {
+    hr: null,
+    hrv: null,
+    scl: null,
+    watchQuality: "unknown",
+    dataAgeSec: null,
+    location: "unavailable",
+  },
+  timing: {
+    dayPart: "night",
+    interventionsToday: 0,
+    maxInterventions: 0,
+    lastInterventionHoursAgo: null,
+    inMeeting: null,
+    minutesToNextEvent: null,
+  },
+  detections: {
+    energy: "normal",
+    inFlowMode: false,
+    stressElevated: false,
+    recoveryDetected: false,
+  },
+};
+
+export const TIMING_DECISION_V1_OUTCOMES = [
+  "skip",
+  "intervene",
+] as const;
+export type TimingDecisionV1Outcome =
+  (typeof TIMING_DECISION_V1_OUTCOMES)[number];
+
+export const TIMING_DECISION_V1_REASON_CODES = [
+  "unknown",
+  "watch_quality_bad",
+  "insufficient_signal",
+  "recent_intervention",
+  "quota_reached",
+  "quiet_hours",
+  "flow_protection",
+  "stress_sustained",
+  "recovery_window",
+] as const;
+export type TimingDecisionV1ReasonCode =
+  (typeof TIMING_DECISION_V1_REASON_CODES)[number];
+
+export interface TimingDecisionV1 {
+  version: typeof TIMING_DECISION_V1_VERSION;
+  outcome: TimingDecisionV1Outcome;
+  shouldIntervene: boolean;
+  interventionType: InterventionType | null;
+  reasonCode: TimingDecisionV1ReasonCode;
+  rationale: string;
+  cooldownMinutes: number | null;
+}
+
+export const DEFAULT_TIMING_DECISION_V1: TimingDecisionV1 = {
+  version: TIMING_DECISION_V1_VERSION,
+  outcome: "skip",
+  shouldIntervene: false,
+  interventionType: null,
+  reasonCode: "unknown",
+  rationale: "",
+  cooldownMinutes: null,
+};
+
 // ── Batch Message Protocol ──────────────────────────────────────────
 
 /**
@@ -389,11 +545,19 @@ export interface BatchMessage {
   hrv?: {
     rmssd: number;
     sdnn: number;
+    samples?: number;
   } | null;
   /** EDA (skin conductance) aggregates */
   eda?: {
     meanScl: number;
     peakScl: number;
+  } | null;
+  /** Accelerometer aggregates for stillness context */
+  accel?: {
+    magnitudeMean: number;
+    magnitudeStd: number;
+    stillness: number;
+    samples: number;
   } | null;
   /** Location snapshot (optional, coarse GPS) */
   location?: {
