@@ -29,6 +29,8 @@ START_PHASE=""
 END_PHASE=""
 LIST_ONLY="${LIST_ONLY:-0}"
 NO_PROMOTE="${NO_PROMOTE:-0}"
+AUTO_ASSIGN_METADATA="${AUTO_ASSIGN_METADATA:-1}"
+TASK_METADATA_ASSIGNER="${TASK_METADATA_ASSIGNER:-scripts/assign_task_metadata.sh}"
 
 usage() {
   cat <<'USAGE'
@@ -43,6 +45,7 @@ Modes:
 Behavior:
   - Executes active plan from .ralph/state.json
   - Plan packs live in .ralph/plans/<plan-id>/
+  - Auto-assigns task metadata (`engine/model/effort`) by default when missing
   - Auto-promotes to next_plan when completion criteria are met (unless --no-promote)
 USAGE
 }
@@ -169,6 +172,15 @@ run_plan() {
   if [[ ! -f "$tasks_file" ]]; then
     echo "ERROR: missing tasks file in plan: $tasks_file" >&2
     exit 1
+  fi
+
+  if [[ "$AUTO_ASSIGN_METADATA" == "1" && "$LIST_ONLY" != "1" ]]; then
+    if [[ -x "$TASK_METADATA_ASSIGNER" ]]; then
+      TASKS_FILE="$tasks_file" "$TASK_METADATA_ASSIGNER" || \
+        echo "WARN: task metadata assignment failed; continuing with existing tasks."
+    else
+      echo "WARN: metadata assigner not executable: $TASK_METADATA_ASSIGNER"
+    fi
   fi
 
   sync_legacy_current "$plan_dir"
