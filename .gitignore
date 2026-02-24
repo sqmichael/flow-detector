@@ -46,3 +46,7 @@ server/calling/data/
 .claude/orchestrator/state.json
 tsconfig.tsbuildinfo
 .ralph/
+
+# Local runtime snapshots
+.openclaw-workspace/BIOMETRIC_CONTEXT.md
+sensor-fusion.db
