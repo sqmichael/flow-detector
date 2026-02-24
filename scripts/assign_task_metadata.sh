@@ -61,7 +61,23 @@ if ! command -v ralphy >/dev/null 2>&1; then
   exit 0
 fi
 
-prompt="Edit $TASKS_FILE only. For each unchecked task line that lacks metadata, prepend exactly one metadata block in this format: [engine=$ENGINE_TAG_DEFAULT model=$MODEL_DEFAULT effort=low|medium|high]. Infer effort from task complexity. Do not modify checked tasks. Do not change task wording beyond adding the metadata block."
+prompt="Edit $TASKS_FILE only. For each unchecked task line that lacks metadata, prepend exactly one metadata block.
+
+Format: [engine=<engine> model=<model> effort=low|medium|high]
+
+Engine routing — pick the best fit per task:
+  claude   model=claude-sonnet-4-6  — complex reasoning, multi-file changes, architecture decisions, ambiguous requirements, code review, writing nuanced tests
+  claude   model=claude-opus-4-6    — deep architecture or design tasks requiring sustained reasoning across many constraints
+  codex    model=gpt-5.3-codex      — straightforward implementation, boilerplate, well-scoped single-file changes, adding tests that follow an existing pattern
+  gemini   model=gemini-2.5-flash   — research, documentation, broad knowledge lookups with no file edits
+  When uncertain, default to: engine=$ENGINE_TAG_DEFAULT model=$MODEL_DEFAULT
+
+Effort:
+  low    < 30 min, single file, simple change
+  medium   1–2 h, 2–4 files, moderate complexity
+  high   > 2 h, many files, or high uncertainty
+
+Rules: do NOT modify checked tasks. Do NOT change task wording. Add ONLY the metadata prefix."
 
 set +e
 if command -v timeout >/dev/null 2>&1; then
