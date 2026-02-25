@@ -160,7 +160,19 @@ async function checkNtfyHealth(): Promise<{ ok: boolean; message: string }> {
   }
 
   try {
-    const res = await fetch(`${baseUrl}/${encodeURIComponent(topic)}/json?poll=1`, {
+    // Avoid long-poll checks here; they can legitimately wait > timeout when no messages exist.
+    // First, verify server health endpoint, then do a fast topic endpoint probe.
+    const health = await fetch(`${baseUrl}/v1/health`, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (!health.ok) {
+      return { ok: false, message: `${baseUrl}/v1/health returned ${health.status}` };
+    }
+
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(topic)}/json?poll=0`, {
       method: "GET",
       headers,
       signal: AbortSignal.timeout(4000),
@@ -571,6 +583,7 @@ async function main(): Promise<void> {
 
   const noOpenClaw = process.argv.includes("--no-openclaw");
   const daemon = process.argv.includes("--daemon");
+  const testMode = process.argv.includes("--test-mode");
 
   switch (command) {
     case "start": {
@@ -588,8 +601,20 @@ async function main(): Promise<void> {
       if (daemon) {
         console.log("Running in daemon mode (no terminal UI).\n");
       }
+      if (testMode) {
+        console.log("TEST MODE enabled: Lowering stress detection threshold to 2 minutes.\n");
+      }
       startRatingServer(DEFAULT_CONFIG.logPath);
-      const agent = getAgent(undefined, { useOpenClaw: !noOpenClaw });
+      const agentConfig: Partial<AmbientAgentConfig> | undefined = testMode
+        ? {
+            stressDetection: {
+              hrElevatedAboveBaseline: 10,
+              hrvSuppressedBelowBaseline: 0.7,
+              durationMinutes: 2, // Lowered for testing
+            },
+          }
+        : undefined;
+      const agent = getAgent(agentConfig, { useOpenClaw: !noOpenClaw });
       await agent.start();
       await showStatus(true, daemon);
       break;
@@ -634,6 +659,7 @@ async function main(): Promise<void> {
       console.log("Options:");
       console.log("  --no-openclaw  Disable OpenClaw, use reasoning.ts fallback");
       console.log("  --daemon       Run without terminal UI (for tmux/nohup)");
+      console.log("  --test-mode    Lower thresholds for faster testing (stress: 2min)");
       console.log("");
       rl.close();
   }
