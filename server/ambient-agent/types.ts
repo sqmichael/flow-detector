@@ -74,6 +74,8 @@ export interface Intervention {
       scl?: number;
       flowDurationMinutes?: number;
     };
+    /** Optional decision-time context envelope for offline analysis */
+    dynamicContext?: unknown;
   };
   /** User response if any */
   response?: {

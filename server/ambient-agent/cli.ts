@@ -602,7 +602,10 @@ async function main(): Promise<void> {
         console.log("Running in daemon mode (no terminal UI).\n");
       }
       if (testMode) {
-        console.log("TEST MODE enabled: Lowering stress detection threshold to 2 minutes.\n");
+        console.log("TEST MODE enabled: Lowering stress threshold to 2 minutes and resetting daily intervention state.\n");
+        process.env.AMBIENT_TEST_MODE = "1";
+      } else {
+        delete process.env.AMBIENT_TEST_MODE;
       }
       startRatingServer(DEFAULT_CONFIG.logPath);
       const agentConfig: Partial<AmbientAgentConfig> | undefined = testMode
@@ -614,7 +617,10 @@ async function main(): Promise<void> {
             },
           }
         : undefined;
-      const agent = getAgent(agentConfig, { useOpenClaw: !noOpenClaw });
+      const agent = getAgent(agentConfig, {
+        useOpenClaw: !noOpenClaw,
+        ignorePersistedInterventions: testMode,
+      });
       await agent.start();
       await showStatus(true, daemon);
       break;

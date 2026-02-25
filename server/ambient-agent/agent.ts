@@ -292,10 +292,31 @@ export class AmbientAgent {
   private lastDecisionWindowMs: number = 30_000;
   private baselineStage: BaselineStage = "none";
   private baselineFilePath: string;
+  private ignorePersistedInterventions: boolean;
 
-  constructor(config: Partial<AmbientAgentConfig> = {}, options?: { useOpenClaw?: boolean }) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+  constructor(
+    config: Partial<AmbientAgentConfig> = {},
+    options?: { useOpenClaw?: boolean; ignorePersistedInterventions?: boolean }
+  ) {
+    // Deep merge config with DEFAULT_CONFIG
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config,
+      flowDetection: { ...DEFAULT_CONFIG.flowDetection, ...config.flowDetection },
+      stressDetection: { ...DEFAULT_CONFIG.stressDetection, ...config.stressDetection },
+      eveningReflection: {
+        ...DEFAULT_CONFIG.eveningReflection,
+        ...config.eveningReflection,
+        recoveryIndicators: {
+          ...DEFAULT_CONFIG.eveningReflection.recoveryIndicators,
+          ...config.eveningReflection?.recoveryIndicators,
+        },
+      },
+      quietHours: { ...DEFAULT_CONFIG.quietHours, ...config.quietHours },
+      openclaw: { ...DEFAULT_CONFIG.openclaw, ...config.openclaw },
+    };
     this.useOpenClaw = options?.useOpenClaw ?? this.config.openclaw.enabled;
+    this.ignorePersistedInterventions = options?.ignorePersistedInterventions ?? false;
     this.hrvCalculator = new HRVCalculator();
     this.logger = new InterventionLogger(this.config.logPath);
     this.energyLogger = new EnergyLogger(
@@ -415,7 +436,9 @@ export class AmbientAgent {
     this.loadPersistedBaseline();
 
     // Load today's interventions from log
-    const todayInterventions = await this.logger.getTodayInterventions();
+    const todayInterventions = this.ignorePersistedInterventions
+      ? []
+      : await this.logger.getTodayInterventions();
     this.state.interventionsToday = todayInterventions;
 
     // Check if we've already done interventions today
@@ -426,7 +449,11 @@ export class AmbientAgent {
       (i) => i.type === "evening_reflection"
     );
 
-    this.log(`Loaded ${todayInterventions.length} interventions from today`);
+    this.log(
+      this.ignorePersistedInterventions
+        ? "Loaded 0 interventions from today (test-mode reset)"
+        : `Loaded ${todayInterventions.length} interventions from today`
+    );
 
     this.connect();
     this.startProcessingLoop();
@@ -711,6 +738,12 @@ export class AmbientAgent {
 
     // Always update timestamp — watch is alive even if HR is between bursts
     this.state.lastSensorUpdate = msg.timestamp;
+
+    // Mark watch as connected when receiving batches
+    if (!this.state.isWatchConnected) {
+      this.state.isWatchConnected = true;
+      this.state.connectionState = "connected";
+    }
 
     const hrInfo = hasHR ? `HR=${msg.hr!.mean.toFixed(0)} (${msg.hr!.samples} samples)` : "HR=none";
     const hrvInfo = msg.hrv ? `HRV=${msg.hrv.rmssd.toFixed(1)}ms` : "";
@@ -1515,7 +1548,7 @@ export class AmbientAgent {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
         flowDurationMinutes: detection.stableMinutes,
-      });
+      }, dynamicCtx);
 
       this.state.interventionsToday.push(intervention);
       await this.logger.logIntervention(intervention);
@@ -1527,14 +1560,12 @@ export class AmbientAgent {
 
   private async processStressDetection(dynamicCtx?: DynamicContext): Promise<void> {
     if (this.state.stressDetection.checkinOfferedToday) return;
-
-    const detection = detectStressPattern(
-      this.state.currentHR,
-      this.state.currentHRV,
-      this.state.baseline,
-      this.state.stressDetection.elevationStartedAt,
-      this.config.stressDetection
-    );
+    const detection = {
+      shouldTriggerCheckin:
+        this.state.stressDetection.isElevated &&
+        this.state.stressDetection.elevatedMinutes >= this.config.stressDetection.durationMinutes,
+      elevatedMinutes: this.state.stressDetection.elevatedMinutes,
+    };
 
     if (detection.shouldTriggerCheckin) {
       const reasoningInput = buildReasoningInput(
@@ -1559,7 +1590,7 @@ export class AmbientAgent {
       const intervention = createIntervention("proactive_checkin", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
-      });
+      }, dynamicCtx);
       if (decision.message) {
         intervention.trigger.reason = decision.message;
       }
@@ -1608,7 +1639,7 @@ export class AmbientAgent {
       const intervention = createIntervention("evening_reflection", decision.reasoning, {
         hr: this.state.currentHR ?? undefined,
         hrv: this.state.currentHRV ?? undefined,
-      });
+      }, dynamicCtx);
 
       this.state.interventionsToday.push(intervention);
       await this.logger.logIntervention(intervention);
@@ -1725,7 +1756,7 @@ let agentInstance: AmbientAgent | null = null;
 
 export function getAgent(
   config?: Partial<AmbientAgentConfig>,
-  options?: { useOpenClaw?: boolean }
+  options?: { useOpenClaw?: boolean; ignorePersistedInterventions?: boolean }
 ): AmbientAgent {
   if (!agentInstance) {
     agentInstance = new AmbientAgent(config, options);

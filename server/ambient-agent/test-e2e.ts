@@ -25,12 +25,29 @@ const RELAY_URL = "ws://localhost:8765/watch";
 const RELAY_HTTP = "http://localhost:8765";
 const LOG_PATH = path.resolve("./server/data/intervention-log.jsonl");
 const DB_PATH = path.resolve("./server/data/sensor-fusion.db");
+const AGENT_LOG_PATH = process.env.AGENT_LOG_PATH || "/tmp/agent.log";
 
 // Fake GPS coordinates (San Francisco, rounded to 2 decimal places)
 const FAKE_LOCATION = { latitude: 37.78, longitude: -122.42, accuracy: 15 };
 
 async function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Create a session on the relay HTTP API */
+async function createSession(deviceName: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${RELAY_HTTP}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_name: deviceName }),
+    });
+    const json = (await res.json()) as { session_id: string };
+    return json.session_id;
+  } catch (err) {
+    console.error("[Test] Could not create session:", err);
+    return null;
+  }
 }
 
 /** Activate a session on the relay HTTP API so batches are persisted to SQLite */
@@ -133,12 +150,20 @@ function verifyDynamicContextInLog(): { found: boolean; sampleEntry: object | nu
     for (const line of lines) {
       try {
         const entry = JSON.parse(line) as Record<string, unknown>;
-        if (typeof entry.triggeredAt === "number" && entry.triggeredAt > cutoff) {
-          // Check for dynamicContext in trigger data or top-level
-          const trigger = entry.trigger as Record<string, unknown> | undefined;
+        const intervention =
+          (entry.intervention as Record<string, unknown> | undefined) ?? undefined;
+        const interventionTriggeredAt = intervention?.triggeredAt;
+        const interventionTrigger = intervention?.trigger as Record<string, unknown> | undefined;
+        const topLevelTrigger = entry.trigger as Record<string, unknown> | undefined;
+
+        if (typeof interventionTriggeredAt === "number" && interventionTriggeredAt > cutoff) {
+          // Accept both legacy and current shapes:
+          // - current: entry.intervention.trigger.dynamicContext
+          // - legacy fallback: entry.trigger.dynamicContext or entry.dynamicContext
           const hasDynCtx =
-            entry.dynamicContext !== undefined ||
-            trigger?.dynamicContext !== undefined;
+            interventionTrigger?.dynamicContext !== undefined ||
+            topLevelTrigger?.dynamicContext !== undefined ||
+            entry.dynamicContext !== undefined;
           if (hasDynCtx) {
             return { found: true, sampleEntry: entry };
           }
@@ -155,20 +180,93 @@ function verifyDynamicContextInLog(): { found: boolean; sampleEntry: object | nu
   }
 }
 
+/**
+ * Verify that an intervention was triggered during the test.
+ * Returns { found: bool, count: number }
+ */
+function verifyInterventionInLog(): { found: boolean; count: number } {
+  if (!existsSync(LOG_PATH)) {
+    console.log("[Verify] Intervention log not found at", LOG_PATH);
+    return { found: false, count: 0 };
+  }
+
+  try {
+    const lines = readFileSync(LOG_PATH, "utf-8")
+      .split("\n")
+      .filter(Boolean);
+
+    // Look for recent intervention entries (within the last 10 minutes)
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    let count = 0;
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        // Check for intervention entries (not gap events)
+        if (entry.intervention && typeof entry.timestamp === "number" && entry.timestamp > cutoff) {
+          count++;
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+
+    return { found: count > 0, count };
+  } catch (err) {
+    console.error("[Verify] Log read failed:", err);
+    return { found: false, count: 0 };
+  }
+}
+
+function printAgentDiagnostics(): void {
+  if (!existsSync(AGENT_LOG_PATH)) {
+    console.log(`[Verify] Agent log not found at ${AGENT_LOG_PATH}`);
+    return;
+  }
+
+  try {
+    const lines = readFileSync(AGENT_LOG_PATH, "utf-8")
+      .split("\n")
+      .filter(Boolean);
+    const recent = lines.slice(-300);
+    const signals = recent.filter(
+      (line) =>
+        line.includes("[DQ]") ||
+        line.includes("Stress: LLM skipped") ||
+        line.includes("[Fallback] Using reasoning.ts") ||
+        line.includes("Intervention logged")
+    );
+    if (signals.length === 0) {
+      console.log("[Verify] Agent diagnostics: no DQ/decision lines found in recent log window");
+      return;
+    }
+    console.log("[Verify] Agent diagnostics (recent DQ/decision lines):");
+    for (const line of signals.slice(-20)) {
+      console.log(`  ${line}`);
+    }
+  } catch (err) {
+    console.error("[Verify] Agent log diagnostics read failed:", err);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
   console.log("\n=== Dynamic Context + Location E2E Smoke Test ===\n");
   console.log("Prerequisites:");
   console.log("  - watch-relay running: npm run watch-server");
-  console.log("  - ambient agent running: npx tsx server/ambient-agent/cli.ts start --no-openclaw");
+  console.log("  - ambient agent running: npx tsx server/ambient-agent/cli.ts start --no-openclaw --test-mode");
   console.log("");
 
-  // Generate a unique session ID for this test run
-  const sessionId = `e2e-test-${Date.now()}`;
-  console.log(`[Test] Session ID: ${sessionId}`);
+  // 1. Create session via API, then activate it
+  console.log("[Test] Creating session via API...");
+  const sessionId = await createSession("Test Watch (E2E)");
+  if (!sessionId) {
+    console.error("[Test] Failed to create session — aborting");
+    process.exit(1);
+  }
+  console.log(`[Test] Session created: ${sessionId}`);
 
-  // 1. Activate session so batches are persisted to SQLite
   const activated = await activateSession(sessionId);
   console.log(`[Test] Session activation: ${activated ? "OK" : "FAILED (relay may not be running)"}`);
 
@@ -206,13 +304,16 @@ async function main() {
   await sleep(35000);
 
   // 5. Phase 2: Stress pattern (elevated HR, suppressed HRV, still with location)
+  // In test mode, stress detection threshold is 2 minutes
   console.log("[Test] Phase 2: Simulating stress pattern (elevated HR, suppressed HRV + location)...");
-  for (let i = 0; i < 20; i++) {
+  console.log("[Test] Sending stress data for ~3 minutes to trigger intervention (test mode: 2min threshold)...");
+  const stressStartTime = Date.now();
+  while (Date.now() - stressStartTime < 3 * 60 * 1000) { // 3 minutes of stress data
     sendBatch(ws, 90 + Math.random() * 5, 28 + Math.random() * 3, 5.0 + Math.random() * 1.0, true);
-    await sleep(1500);
+    await sleep(1500); // Send batch every 1.5s
   }
-  console.log("[Test] Stress data sent. Waiting 60s for agent detection tick...\n");
-  await sleep(60000);
+  console.log("[Test] Stress data sent. Waiting 35s for agent detection tick...\n");
+  await sleep(35000);
 
   // 6. Phase 3: Recovery (back to normal, no location — tests staleness logic)
   console.log("[Test] Phase 3: Recovery batches WITHOUT location (testing staleness clear)...");
@@ -234,14 +335,21 @@ async function main() {
   console.log(`[Verify] Location rows in SQLite (session ${sessionId.slice(0, 20)}...): ${locationCount}`);
   console.log(`[Verify] Location persistence: ${locationOk ? "✓ PASS" : "✗ FAIL (check relay is running + session was activated)"}`);
 
-  // 8. Verify dynamicContext in intervention log
+  // 8. Verify intervention was triggered
+  const { found: interventionFound, count: interventionCount } = verifyInterventionInLog();
+  console.log(`\n[Verify] Intervention triggered: ${interventionFound ? "✓ PASS" : "⚠ NOT FOUND"} (${interventionCount} intervention(s) in last 10min)`);
+  if (!interventionFound) {
+    printAgentDiagnostics();
+  }
+
+  // 9. Verify dynamicContext in intervention log
   const { found: dynCtxFound, sampleEntry } = verifyDynamicContextInLog();
-  console.log(`\n[Verify] DynamicContext in intervention log: ${dynCtxFound ? "✓ PASS" : "⚠ NOT FOUND (intervention may not have fired yet — check agent logs)"}`);
+  console.log(`[Verify] DynamicContext in intervention log: ${dynCtxFound ? "✓ PASS" : "⚠ NOT FOUND (intervention may not have fired yet — check agent logs)"}`);
   if (sampleEntry) {
     console.log("[Verify] Sample entry with dynamicContext:", JSON.stringify(sampleEntry, null, 2).slice(0, 400) + "...");
   }
 
-  // 9. Manual verification notes
+  // 10. Manual verification notes
   console.log("\n=== Manual Checks ===");
   console.log("After running this test, verify in agent logs:");
   console.log("  1. Baseline: '[Agent] Baseline established: HR=6X bpm, HRV=XXms'");

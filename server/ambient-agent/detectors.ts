@@ -439,6 +439,7 @@ export function estimateBaseline(
   return {
     restingHR: medianHR,
     baselineHRV: meanHRV,
+    baselineSCL: 2.5, // Conservative default; refined with actual EDA history
     updatedAt: now,
   };
 }

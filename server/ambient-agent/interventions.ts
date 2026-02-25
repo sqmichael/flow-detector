@@ -470,7 +470,8 @@ let interventionCounter = 0;
 export function createIntervention(
   type: InterventionType,
   reason: string,
-  context: Intervention["trigger"]["context"]
+  context: Intervention["trigger"]["context"],
+  dynamicContext?: unknown
 ): Intervention {
   interventionCounter++;
 
@@ -481,6 +482,7 @@ export function createIntervention(
     trigger: {
       reason,
       context,
+      ...(dynamicContext === undefined ? {} : { dynamicContext }),
     },
   };
 }

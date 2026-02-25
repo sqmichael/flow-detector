@@ -136,6 +136,11 @@ export function serializeDynamicContext(ctx: DynamicContext): string {
 export async function decideIntervention(
   input: ReasoningInput
 ): Promise<ReasoningOutput> {
+  if (process.env.AMBIENT_TEST_MODE === "1") {
+    console.log("[Reasoning] Test mode enabled - forcing fallback decision");
+    return fallbackDecision(input);
+  }
+
   const { dynamicContext, ...inputWithoutContext } = input;
   const contextBlock = dynamicContext ? serializeDynamicContext(dynamicContext) : "";
   const userPrompt = JSON.stringify(inputWithoutContext) + contextBlock;
@@ -208,7 +213,7 @@ function fallbackDecision(input: ReasoningInput): ReasoningOutput {
   if (context.lastInterventionHoursAgo !== null && context.lastInterventionHoursAgo < 2) {
     return { shouldIntervene: false, interventionType: null, message: null, reasoning: "Too recent (fallback)" };
   }
-  if (trigger.confidence === "low") {
+  if (trigger.confidence === "low" && process.env.AMBIENT_TEST_MODE !== "1") {
     return { shouldIntervene: false, interventionType: null, message: null, reasoning: "Low confidence (fallback)" };
   }
 
