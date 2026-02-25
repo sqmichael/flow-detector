@@ -30,13 +30,16 @@ END_PHASE=""
 LIST_ONLY="${LIST_ONLY:-0}"
 NO_PROMOTE="${NO_PROMOTE:-0}"
 AUTO_PROMOTE_OVERRIDE="${AUTO_PROMOTE_OVERRIDE:-}" # true|false|""
+FOLLOW_PROMOTIONS="${FOLLOW_PROMOTIONS:-0}"
+MAX_PROMOTION_HOPS="${MAX_PROMOTION_HOPS:-20}"
 AUTO_ASSIGN_METADATA="${AUTO_ASSIGN_METADATA:-1}"
 TASK_METADATA_ASSIGNER="${TASK_METADATA_ASSIGNER:-scripts/assign_task_metadata.sh}"
+AUTO_PROMOTED_TO=""
 
 usage() {
   cat <<'USAGE'
 Usage:
-  oralph [--plan phase|loop] [--run step|overnight] [--plan-id <id>] [--start-phase N] [--end-phase N] [--list] [--auto-promote|--no-auto-promote]
+  oralph [--plan phase|loop] [--run step|overnight] [--plan-id <id>] [--start-phase N] [--end-phase N] [--list] [--auto-promote|--no-auto-promote] [--follow-promotions]
   oralph [start-phase] [end-phase]   # compatibility shorthand
 
 Modes:
@@ -44,6 +47,7 @@ Modes:
   --run step|overnight Run one task at a time or full range
   --auto-promote       Force auto-promotion on for this run
   --no-auto-promote    Force auto-promotion off for this run
+  --follow-promotions  Keep executing newly promoted plans in the same run
 
 Behavior:
   - Executes active plan from .ralph/state.json
@@ -224,6 +228,7 @@ auto_promote_if_ready() {
   if [[ "$LIST_ONLY" == "1" ]]; then
     return 0
   fi
+  AUTO_PROMOTED_TO=""
 
   local completion="$(yaml_get completion "$plan_yaml")"
   completion="${completion:-all_tasks_checked}"
@@ -272,6 +277,7 @@ auto_promote_if_ready() {
 
   json_write_state "$next_plan"
   sync_legacy_current "$next_dir"
+  AUTO_PROMOTED_TO="$next_plan"
   echo "Auto-promoted active plan: $plan_id -> $next_plan"
 }
 
@@ -321,6 +327,10 @@ while [[ $# -gt 0 ]]; do
       AUTO_PROMOTE_OVERRIDE="false"
       shift
       ;;
+    --follow-promotions)
+      FOLLOW_PROMOTIONS=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -355,46 +365,66 @@ if [[ -n "$PLAN_ID_OVERRIDE" ]]; then
   active_plan="$PLAN_ID_OVERRIDE"
 fi
 
-plan_dir="$PLANS_DIR/$active_plan"
-if [[ ! -d "$plan_dir" ]]; then
-  echo "ERROR: active plan pack missing: $plan_dir" >&2
-  echo "Action: run 'opipeline repair' or set a valid plan with --plan-id" >&2
-  exit 1
-fi
+promotion_hops=0
 
-plan_yaml="$plan_dir/plan.yaml"
-if [[ ! -f "$plan_yaml" ]]; then
-  cat > "$plan_yaml" <<YAML
+while :; do
+  plan_dir="$PLANS_DIR/$active_plan"
+  if [[ ! -d "$plan_dir" ]]; then
+    echo "ERROR: active plan pack missing: $plan_dir" >&2
+    echo "Action: run 'opipeline repair' or set a valid plan with --plan-id" >&2
+    exit 1
+  fi
+
+  plan_yaml="$plan_dir/plan.yaml"
+  if [[ ! -f "$plan_yaml" ]]; then
+    cat > "$plan_yaml" <<YAML
 plan_id: $active_plan
 plan_shape: loop
 completion: all_tasks_checked
 auto_promote: false
 next_plan:
 YAML
-fi
+  fi
 
-manifest_shape="$(yaml_get plan_shape "$plan_yaml")"
-manifest_shape="${manifest_shape:-loop}"
+  manifest_shape="$(yaml_get plan_shape "$plan_yaml")"
+  manifest_shape="${manifest_shape:-loop}"
 
-case "$manifest_shape" in
-  phase|loop) ;;
-  *) echo "ERROR: invalid plan_shape in $plan_yaml: $manifest_shape" >&2; exit 1 ;;
-esac
-
-effective_shape="$manifest_shape"
-if [[ -n "$PLAN_OVERRIDE" ]]; then
-  case "$PLAN_OVERRIDE" in
-    phase|loop) effective_shape="$PLAN_OVERRIDE" ;;
-    *) echo "ERROR: --plan must be phase or loop" >&2; exit 1 ;;
+  case "$manifest_shape" in
+    phase|loop) ;;
+    *) echo "ERROR: invalid plan_shape in $plan_yaml: $manifest_shape" >&2; exit 1 ;;
   esac
-fi
 
-echo "Active plan: $active_plan"
-echo "Plan shape: $effective_shape"
-echo "Run style: $RUN_STYLE"
+  effective_shape="$manifest_shape"
+  if [[ -n "$PLAN_OVERRIDE" ]]; then
+    case "$PLAN_OVERRIDE" in
+      phase|loop) effective_shape="$PLAN_OVERRIDE" ;;
+      *) echo "ERROR: --plan must be phase or loop" >&2; exit 1 ;;
+    esac
+  fi
 
-run_plan "$plan_dir" "$effective_shape"
-# Keep legacy view in sync with mutations (task checkoffs) done in plan pack.
-sync_legacy_current "$plan_dir"
-json_write_state "$active_plan"
-auto_promote_if_ready "$active_plan" "$plan_dir" "$plan_yaml"
+  echo "Active plan: $active_plan"
+  echo "Plan shape: $effective_shape"
+  echo "Run style: $RUN_STYLE"
+
+  run_plan "$plan_dir" "$effective_shape"
+  # Keep legacy view in sync with mutations (task checkoffs) done in plan pack.
+  sync_legacy_current "$plan_dir"
+  json_write_state "$active_plan"
+  auto_promote_if_ready "$active_plan" "$plan_dir" "$plan_yaml"
+
+  if [[ "$FOLLOW_PROMOTIONS" == "1" && -n "$AUTO_PROMOTED_TO" ]]; then
+    promotion_hops=$((promotion_hops + 1))
+    if (( promotion_hops > MAX_PROMOTION_HOPS )); then
+      echo "ERROR: exceeded MAX_PROMOTION_HOPS=$MAX_PROMOTION_HOPS while following promotions." >&2
+      exit 1
+    fi
+    active_plan="$AUTO_PROMOTED_TO"
+    # Do not carry explicit phase bounds into subsequent promoted plans.
+    START_PHASE=""
+    END_PHASE=""
+    echo "Following promoted plan: $active_plan"
+    continue
+  fi
+
+  break
+done
