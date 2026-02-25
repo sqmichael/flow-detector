@@ -58,10 +58,57 @@ test("unknown location fails safe to delay", () => {
   assert(decision.reason === "unknown_location", "unknown-location reason mismatch");
 });
 
+test("missing location context fails safe to unknown_location with default delay", () => {
+  const decision = decideTimingPolicy(
+    makeContext({
+      locationType: undefined as unknown as TimingPolicyContext["locationType"],
+      nextFreeWindowMinutes: null,
+    })
+  );
+  assert(decision.messageNow === false, "missing location should fail safe");
+  assert(decision.reason === "unknown_location", "missing-location reason mismatch");
+  assert(decision.delayMinutes === 15, "missing location should use default delay");
+});
+
+test("unknown_location reason output stays stable for canonicalized unknown location", () => {
+  const decision = decideTimingPolicy(
+    makeContext({
+      canMessageNow: true,
+      currentMode: "free",
+      nextFreeWindowMinutes: 25,
+      locationType: "unknown",
+      calendarPressure: "low",
+    })
+  );
+  assert(decision.reason === "unknown_location", "unknown_location reason output mismatch");
+  assert(decision.messageType === "none", "unknown_location should not send a message type");
+});
+
 test("high calendar pressure delays message", () => {
   const decision = decideTimingPolicy(makeContext({ calendarPressure: "high" }));
   assert(decision.messageNow === false, "high calendar pressure should delay");
   assert(decision.reason === "high_calendar_pressure", "calendar-pressure reason mismatch");
+});
+
+test("missing calendar context delays with explicit calendar_missing reason", () => {
+  const decision = decideTimingPolicy(makeContext({ calendarPressure: "high", nextFreeWindowMinutes: null }));
+  assert(decision.messageNow === false, "missing calendar context should delay");
+  assert(decision.reason === "calendar_missing", "calendar-missing reason mismatch");
+  assert(decision.delayMinutes === 15, "calendar missing should use default delay");
+});
+
+test("calendar_missing reason output stays stable for canonicalized missing fields", () => {
+  const decision = decideTimingPolicy(
+    makeContext({
+      calendarPressure: "high",
+      nextFreeWindowMinutes: null,
+      locationType: "office",
+      currentMode: "free",
+      canMessageNow: true,
+    })
+  );
+  assert(decision.reason === "calendar_missing", "calendar_missing reason output mismatch");
+  assert(decision.messageType === "none", "calendar_missing should not send a message type");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

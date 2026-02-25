@@ -57,10 +57,14 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   const scores = ratingMap[rating];
 
   try {
-    const success = await getLogger().updateRating(id, {
+    const logger = getLogger();
+    const ratingUpdated = await logger.updateRating(id, {
       ...scores,
       wantAgainTomorrow: rating === "good",
     });
+    const feedback = rating === "good" ? "good" : rating === "bad" ? "bad" : null;
+    const snapshotUpdated = await logger.updateDecisionSnapshotFeedback(id, feedback);
+    const success = ratingUpdated || snapshotUpdated;
 
     if (success) {
       log(`Rated ${id}: ${rating}`);

@@ -74,7 +74,7 @@ function sendBatch(
     type: "batch",
     windowMs: 30000,
     hr: { mean: hr, min: hr - 3, max: hr + 3, samples: 30 },
-    hrv: { rmssd: hrv, sdnn: hrv * 1.2 },
+    hrv: { rmssd: hrv, sdnn: hrv * 1.2, samples: 30 },
     eda: { meanScl: scl, peakScl: scl + 0.5 },
     ...(withLocation ? { location: FAKE_LOCATION } : {}),
     timestamp: Date.now(),

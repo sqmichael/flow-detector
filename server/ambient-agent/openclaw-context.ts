@@ -48,7 +48,7 @@ export interface CalendarContext {
 // ── Calendar Fetch ──────────────────────────────────────────────────
 
 const SMITHERY_URL = "https://api.smithery.ai/connect/moose-7xil/googlesuper-nXzO/mcp";
-const SMITHERY_KEY = "aeb0b948-3503-4b3a-a137-b871518b9398";
+const SMITHERY_KEY = process.env.SMITHERY_KEY ?? null;
 
 // Cache calendar results for 2 minutes to avoid hammering the API
 let calendarCache: { data: CalendarContext | null; fetchedAt: number } | null = null;
@@ -59,6 +59,11 @@ const CALENDAR_CACHE_TTL_MS = 2 * 60 * 1000;
  * Returns null on any failure — caller should treat as "unknown".
  */
 export async function fetchCalendarContext(timezoneOffset: number): Promise<CalendarContext | null> {
+  if (!SMITHERY_KEY) {
+    console.log("[Calendar] SMITHERY_KEY not set");
+    return null;
+  }
+
   // Check cache
   if (calendarCache && (Date.now() - calendarCache.fetchedAt) < CALENDAR_CACHE_TTL_MS) {
     return calendarCache.data;

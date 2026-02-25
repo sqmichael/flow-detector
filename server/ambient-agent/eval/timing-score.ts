@@ -4,6 +4,9 @@
  *
  * Computes mistimed rate from logged decision snapshots.
  *
+ * Primary metric is feedback-based (explicit user labels).
+ * Rule-based timing replay remains a secondary metric.
+ *
  * Usage:
  *   npx tsx server/ambient-agent/eval/timing-score.ts [--input <jsonl-path>]
  */
@@ -18,15 +21,16 @@ import {
   type CalendarPressure,
 } from "../timing-policy";
 
-const TIMING_MODES: ReadonlySet<TimingMode> = new Set(["focus", "meeting", "transit", "free"]);
-const TIMING_LOCATIONS: ReadonlySet<TimingLocation> = new Set(["home", "office", "transit", "other", "unknown"]);
-const CALENDAR_PRESSURES: ReadonlySet<CalendarPressure> = new Set(["low", "medium", "high"]);
+const TIMING_MODES: ReadonlySet<TimingMode> = new Set<TimingMode>(["focus", "meeting", "transit", "free"]);
+const TIMING_LOCATIONS: ReadonlySet<TimingLocation> = new Set<TimingLocation>(["home", "office", "transit", "other", "unknown"]);
+const CALENDAR_PRESSURES: ReadonlySet<CalendarPressure> = new Set<CalendarPressure>(["low", "medium", "high"]);
 
 export interface DecisionSnapshotEntry {
   timestamp: number;
   date: string;
   type: "decision_snapshot";
   decision: unknown;
+  feedback: "good" | "bad" | null;
   sent: boolean;
   deferred_until: string | null;
 }
@@ -34,17 +38,27 @@ export interface DecisionSnapshotEntry {
 export interface TimingScoreSummary {
   totalSnapshots: number;
   pushDecisions: number;
+  pushDecisionFeedback: Array<"good" | "bad" | null>;
+  feedbackRatedPushDecisions: number;
   scoredPushDecisions: number;
   sentPushDecisions: number;
   deferredPushDecisions: number;
   mistimedCount: number;
   mistimedRate: number | null;
+  timingScoredPushDecisions: number;
+  timingMistimedCount: number;
+  timingMistimedRate: number | null;
   missingTimingPolicy: number;
   mistimedByReason: Record<string, number>;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
+}
+
+function parsePushFeedback(raw: unknown): "good" | "bad" | null {
+  if (raw === "good" || raw === "bad") return raw;
+  return null;
 }
 
 function toDecisionSnapshot(entry: unknown): DecisionSnapshotEntry | null {
@@ -62,11 +76,14 @@ function toDecisionSnapshot(entry: unknown): DecisionSnapshotEntry | null {
     return null;
   }
 
+  const feedback = parsePushFeedback(entry.feedback);
+
   return {
     timestamp: entry.timestamp,
     date: entry.date,
     type: "decision_snapshot",
     decision: entry.decision,
+    feedback,
     sent: entry.sent,
     deferred_until: deferredUntil,
   };
@@ -130,10 +147,14 @@ export function computeTimingScore(entries: unknown[]): TimingScoreSummary {
     .filter((entry): entry is DecisionSnapshotEntry => entry !== null);
 
   let pushDecisions = 0;
+  const pushDecisionFeedback: Array<"good" | "bad" | null> = [];
+  let feedbackRatedPushDecisions = 0;
   let scoredPushDecisions = 0;
   let sentPushDecisions = 0;
   let deferredPushDecisions = 0;
   let mistimedCount = 0;
+  let timingScoredPushDecisions = 0;
+  let timingMistimedCount = 0;
   let missingTimingPolicy = 0;
   const mistimedByReason: Record<string, number> = {};
 
@@ -142,31 +163,47 @@ export function computeTimingScore(entries: unknown[]): TimingScoreSummary {
     if (pushActions.length === 0) continue;
 
     pushDecisions++;
+    pushDecisionFeedback.push(snapshot.feedback);
+    if (snapshot.feedback !== null) feedbackRatedPushDecisions++;
     if (snapshot.sent) sentPushDecisions++;
     if (snapshot.deferred_until !== null) deferredPushDecisions++;
 
     const timingContext = getTimingPolicyContext(snapshot);
+    let timingMistimed = false;
     if (!timingContext) {
       missingTimingPolicy++;
-      continue;
+    } else {
+      timingScoredPushDecisions++;
+      const timingDecision = decideTimingPolicy(timingContext);
+      timingMistimed = !timingDecision.messageNow;
+      if (timingMistimed) {
+        timingMistimedCount++;
+        mistimedByReason[timingDecision.reason] = (mistimedByReason[timingDecision.reason] || 0) + 1;
+      }
     }
 
-    scoredPushDecisions++;
-    const timingDecision = decideTimingPolicy(timingContext);
-    if (!timingDecision.messageNow) {
+    if (snapshot.feedback !== null) {
+      scoredPushDecisions++;
+    }
+
+    if (snapshot.feedback === "bad") {
       mistimedCount++;
-      mistimedByReason[timingDecision.reason] = (mistimedByReason[timingDecision.reason] || 0) + 1;
     }
   }
 
   return {
     totalSnapshots: snapshots.length,
     pushDecisions,
+    pushDecisionFeedback,
+    feedbackRatedPushDecisions,
     scoredPushDecisions,
     sentPushDecisions,
     deferredPushDecisions,
     mistimedCount,
     mistimedRate: scoredPushDecisions > 0 ? mistimedCount / scoredPushDecisions : null,
+    timingScoredPushDecisions,
+    timingMistimedCount,
+    timingMistimedRate: timingScoredPushDecisions > 0 ? timingMistimedCount / timingScoredPushDecisions : null,
     missingTimingPolicy,
     mistimedByReason,
   };
@@ -190,12 +227,18 @@ function printSummary(summary: TimingScoreSummary, inputPath: string): void {
   console.log(`Input: ${inputPath}`);
   console.log(`Decision snapshots: ${summary.totalSnapshots}`);
   console.log(`Push decisions: ${summary.pushDecisions}`);
+  console.log(`Feedback-rated push decisions: ${summary.feedbackRatedPushDecisions}`);
   console.log(`Scored push decisions: ${summary.scoredPushDecisions}`);
   console.log(`Push decisions sent: ${summary.sentPushDecisions}`);
   console.log(`Push decisions deferred: ${summary.deferredPushDecisions}`);
   console.log(`Mistimed count: ${summary.mistimedCount}`);
   console.log(
-    `Mistimed rate: ${summary.mistimedRate === null ? "n/a" : `${(summary.mistimedRate * 100).toFixed(1)}%`}`
+    `Mistimed rate (feedback-aware): ${summary.mistimedRate === null ? "n/a" : `${(summary.mistimedRate * 100).toFixed(1)}%`}`
+  );
+  console.log(`Timing-scored push decisions: ${summary.timingScoredPushDecisions}`);
+  console.log(`Timing mistimed count: ${summary.timingMistimedCount}`);
+  console.log(
+    `Timing mistimed rate: ${summary.timingMistimedRate === null ? "n/a" : `${(summary.timingMistimedRate * 100).toFixed(1)}%`}`
   );
   console.log(`Missing timing policy: ${summary.missingTimingPolicy}`);
 

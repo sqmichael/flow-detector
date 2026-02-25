@@ -119,11 +119,67 @@ type BaselineStage = "none" | "provisional" | "stable";
 type PushTimingGateDecision = {
   messageNow: boolean;
   reason: string;
+  delayMinutes: number | null;
 };
 
 const TIMING_MODES: ReadonlySet<TimingMode> = new Set(["focus", "meeting", "transit", "free"]);
 const TIMING_LOCATIONS: ReadonlySet<TimingLocation> = new Set(["home", "office", "transit", "other", "unknown"]);
 const CALENDAR_PRESSURES: ReadonlySet<CalendarPressure> = new Set(["low", "medium", "high"]);
+
+export function hasMissingCalendarTimingContext(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const obj = raw as Record<string, unknown>;
+
+  return !Object.hasOwn(obj, "calendar_pressure") || !Object.hasOwn(obj, "next_free_window_minutes");
+}
+
+function normalizeTimingContext(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as Record<string, unknown>;
+  let normalized = raw;
+
+  if (!Object.hasOwn(obj, "next_free_window_minutes")) {
+    normalized = {
+      ...obj,
+      next_free_window_minutes: null,
+    };
+  }
+
+  if (!Object.hasOwn(obj, "calendar_pressure")) {
+    normalized = {
+      ...(normalized as Record<string, unknown>),
+      calendar_pressure: "high",
+    };
+  }
+
+  return normalized;
+}
+
+function deriveCalendarPressure(calendar: CalendarContext): CalendarPressure {
+  if (calendar.inMeeting) return "high";
+  if (calendar.minutesToNext !== null) {
+    if (calendar.minutesToNext <= 15) return "high";
+    if (calendar.minutesToNext <= 60) return "medium";
+  }
+  if (calendar.upcoming.length > 0) return "medium";
+  return "low";
+}
+
+function enrichTimingContextWithCalendar(raw: unknown, calendar: CalendarContext | null): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  if (!calendar) return raw;
+
+  const obj = raw as Record<string, unknown>;
+  const hasCalendarPressure = Object.hasOwn(obj, "calendar_pressure");
+  const hasNextFreeWindowMinutes = Object.hasOwn(obj, "next_free_window_minutes");
+  if (hasCalendarPressure && hasNextFreeWindowMinutes) return raw;
+
+  return {
+    ...obj,
+    ...(hasCalendarPressure ? {} : { calendar_pressure: deriveCalendarPressure(calendar) }),
+    ...(hasNextFreeWindowMinutes ? {} : { next_free_window_minutes: calendar.minutesToNext }),
+  };
+}
 
 function parseTimingContext(raw: unknown): TimingPolicyContext | null {
   if (!raw || typeof raw !== "object") return null;
@@ -154,16 +210,24 @@ function parseTimingContext(raw: unknown): TimingPolicyContext | null {
   };
 }
 
-export function evaluatePushTimingGate(raw: unknown): PushTimingGateDecision {
-  const context = parseTimingContext(raw);
+export function evaluatePushTimingGate(raw: unknown, calendar: CalendarContext | null = null): PushTimingGateDecision {
+  const withCalendar = enrichTimingContextWithCalendar(raw, calendar);
+  const normalized = normalizeTimingContext(withCalendar);
+
+  if (hasMissingCalendarTimingContext(normalized)) {
+    return { messageNow: false, reason: "missing_calendar_context", delayMinutes: null };
+  }
+
+  const context = parseTimingContext(normalized);
   if (!context) {
-    return { messageNow: false, reason: "bad_or_unknown_context" };
+    return { messageNow: false, reason: "bad_or_unknown_context", delayMinutes: null };
   }
 
   const decision = decideTimingPolicy(context);
   return {
     messageNow: decision.messageNow,
     reason: decision.reason,
+    delayMinutes: decision.delayMinutes,
   };
 }
 
@@ -1043,15 +1107,37 @@ export class AmbientAgent {
       this.config.quietHours.timezoneOffset,
       calendar
     );
+    const buildPushSnapshotFeedback = (
+      outcome: "sent" | "skipped",
+      reason: string | null,
+      deferredUntil: string | null = null,
+      messageId: string | null = null,
+      sentAt: string | null = null
+    ): Record<string, unknown> => ({
+      action: "send_push",
+      outcome,
+      reason,
+      deferred_until: deferredUntil,
+      message_id: messageId,
+      sent_at: sentAt,
+    });
     const logSnapshot = async (
       decision: unknown,
       sent: boolean,
-      deferredUntil: string | null = null
+      deferredUntil: string | null = null,
+      messageId: string | null = null,
+      sentAt: string | null = null,
+      decisionReason: string | null = null,
+      feedback: unknown = null
     ): Promise<void> => {
       await this.logger.logDecisionSnapshot({
+        message_id: messageId,
+        decision_reason: decisionReason,
+        feedback,
         context,
         decision,
         sent,
+        sent_at: sentAt,
         deferred_until: deferredUntil,
       });
     };
@@ -1107,36 +1193,70 @@ export class AmbientAgent {
     const response = await queryOpenClaw(message, this.config.openclaw);
 
     this.log(`[OpenClaw] Response: ${response.reasoning}`);
+    const hasPushAction = response.actions.some((action) => action.type === "send_push");
 
     if (!response.shouldIntervene || response.actions.length === 0) {
-      await logSnapshot(response, false);
+      await logSnapshot(
+        response,
+        false,
+        null,
+        response.decisionId ?? null,
+        null,
+        hasPushAction ? "push_not_sent" : null,
+        hasPushAction ? buildPushSnapshotFeedback("skipped", "push_not_sent") : null
+      );
       return;
     }
 
     // Idempotency check
     if (response.decisionId && this.executedDecisions.has(response.decisionId)) {
       this.log(`[OpenClaw] Skipping duplicate decision: ${response.decisionId}`);
-      await logSnapshot(response, false);
+      await logSnapshot(
+        response,
+        false,
+        null,
+        response.decisionId ?? null,
+        null,
+        hasPushAction ? "duplicate_decision_id" : null,
+        hasPushAction ? buildPushSnapshotFeedback("skipped", "duplicate_decision_id") : null
+      );
       return;
     }
 
-    const execution = await this.executeOpenClawActions(response);
+    const execution = await this.executeOpenClawActions(response, calendar);
+    const snapshotMessageId = execution.messageId ?? response.decisionId ?? null;
 
     if (response.decisionId) {
       this.executedDecisions.add(response.decisionId);
     }
-    await logSnapshot(response, execution.sent, execution.deferredUntil);
+    await logSnapshot(
+      response,
+      execution.sent,
+      execution.deferredUntil,
+      snapshotMessageId,
+      execution.sentAt,
+      execution.decisionReason,
+      execution.feedback
+    );
   }
 
   /**
    * Execute OpenClaw action plan by mapping action types to existing intervention functions
    */
-  private async executeOpenClawActions(response: OpenClawResponse): Promise<{
+  private async executeOpenClawActions(response: OpenClawResponse, calendar: CalendarContext | null = null): Promise<{
     sent: boolean;
     deferredUntil: string | null;
+    messageId: string | null;
+    sentAt: string | null;
+    decisionReason: string | null;
+    feedback: unknown;
   }> {
     let sent = false;
     let deferredUntil: string | null = null;
+    let messageId: string | null = null;
+    let sentAt: string | null = null;
+    let decisionReason: string | null = null;
+    let feedback: unknown = null;
 
     for (const action of response.actions) {
       this.log(`[OpenClaw] Executing action: ${action.type}`);
@@ -1182,28 +1302,43 @@ export class AmbientAgent {
           const actionWithTiming = action as OpenClawAction & { timing_policy?: unknown };
           const responseWithTiming = response as OpenClawResponse & { timing_policy?: unknown };
           const timingGate = evaluatePushTimingGate(
-            actionWithTiming.timing_policy ?? responseWithTiming.timing_policy ?? null
+            actionWithTiming.timing_policy ?? responseWithTiming.timing_policy ?? null,
+            calendar
           );
           if (!timingGate.messageNow) {
             this.log(`[OpenClaw] Skipping send_push: message_now=false (${timingGate.reason})`);
-            const timingContext = parseTimingContext(
-              actionWithTiming.timing_policy ?? responseWithTiming.timing_policy ?? null
-            );
+            if (decisionReason === null) {
+              decisionReason = timingGate.reason;
+            }
             if (
-              timingContext?.nextFreeWindowMinutes !== null &&
-              typeof timingContext?.nextFreeWindowMinutes === "number" &&
-              timingContext.nextFreeWindowMinutes > 0
+              timingGate.delayMinutes !== null &&
+              timingGate.delayMinutes > 0
             ) {
               deferredUntil = new Date(
-                Date.now() + timingContext.nextFreeWindowMinutes * 60 * 1000
+                Date.now() + timingGate.delayMinutes * 60 * 1000
               ).toISOString();
             }
+            feedback = {
+              action: "send_push",
+              outcome: "skipped",
+              reason: timingGate.reason,
+              deferred_until: deferredUntil,
+            };
             break;
           }
 
           const messageGuard = this.getMessageGuardDecision("proactive_checkin");
           if (messageGuard.skip) {
             this.log(`[OpenClaw] Skipping send_push: ${messageGuard.reason}`);
+            if (decisionReason === null) {
+              decisionReason = messageGuard.reason;
+            }
+            feedback = {
+              action: "send_push",
+              outcome: "skipped",
+              reason: messageGuard.reason,
+              deferred_until: deferredUntil,
+            };
             break;
           }
 
@@ -1218,7 +1353,20 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          if (messageId === null) {
+            messageId = intervention.id;
+          }
+          sentAt = new Date().toISOString();
           sent = true;
+          decisionReason = "push_sent";
+          feedback = {
+            action: "send_push",
+            outcome: "sent",
+            reason: decisionReason,
+            message_id: messageId,
+            sent_at: sentAt,
+            deferred_until: null,
+          };
           break;
         }
 
@@ -1257,7 +1405,7 @@ export class AmbientAgent {
       }
     }
 
-    return { sent, deferredUntil };
+    return { sent, deferredUntil, messageId, sentAt, decisionReason, feedback };
   }
 
   private getMessageGuardDecision(type: Intervention["type"]): { skip: boolean; reason: string } {

@@ -1,26 +1,10 @@
 # Tasks
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add helper in `server/ambient-agent/agent.ts` to detect missing calendar context for timing decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Set `next_free_window_minutes` to `null` in timing context when calendar data is missing.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Map missing calendar context to delay-safe pressure handling in timing context generation.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add a unit test for missing-calendar timing context behavior in `server/ambient-agent/agent-timing-policy.test.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add explicit `calendar_missing` delay reason handling in `server/ambient-agent/timing-policy.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=low] Keep explicit `unknown_location` delay reason handling in `server/ambient-agent/timing-policy.ts` for missing location context.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add a timing-policy test for `calendar_missing` reason output in `server/ambient-agent/timing-policy.test.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=low] Add a timing-policy test for `unknown_location` reason output in `server/ambient-agent/timing-policy.test.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add `message_id` to decision snapshot schema in `server/ambient-agent/logger.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add `sent_at` to decision snapshot schema in `server/ambient-agent/logger.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add `decision_reason` to decision snapshot schema in `server/ambient-agent/logger.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add `feedback` to decision snapshot schema in `server/ambient-agent/logger.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `message_id` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `sent_at` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `decision_reason` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `feedback` in decision snapshots from `server/ambient-agent/agent.ts` for push decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Add ntfy-compatible feedback identifiers for push messages in `server/ambient-agent/interventions.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Add feedback parsing path that records `feedback` as `null|good|bad` for logged push decisions.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Add feedback-aware mistimed scoring in `server/ambient-agent/eval/timing-score.ts` as the primary rate.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Keep rule-based mistimed scoring as a secondary metric in `server/ambient-agent/eval/timing-score.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add scorer test coverage for feedback-present entries in `server/ambient-agent/eval/timing-score.test.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add scorer test coverage for feedback-missing entries in `server/ambient-agent/eval/timing-score.test.ts`.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `calendar_pressure` from calendar integration when calendar data is available.
-- [ ] [engine=codex model=gpt-5.3-codex effort=high] Populate `next_free_window_minutes` from calendar integration when calendar data is available.
-- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add a test that confirms safe behavior when calendar integration is disconnected.
+- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add `hrvSamples` field to watch `SensorBatch` entity and write path in `SensorRepository.createBatch`.
+- [ ] [engine=codex model=gpt-5.3-codex effort=high] Implement Room migration so existing watch local DBs gain `hrvSamples` with safe default `0`.
+- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Include `hrv.samples` in watch replay JSON serialization in `SensorRepository.batchToJson`.
+- [ ] [engine=codex model=gpt-5.3-codex effort=low] Ensure direct websocket batch path still sends `hrv.samples` from `HrvAggregate`.
+- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Update `server/ambient-agent/test-runner.ts` to send `hrv.samples` in batch messages.
+- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Update `server/ambient-agent/agent-gap-handling.test.ts` fixtures to include `hrv.samples` where HRV is expected valid.
+- [ ] [engine=codex model=gpt-5.3-codex effort=medium] Add replay-path test proving HRV is accepted when `hrv.samples >= 8` after disconnect/reconnect.
+- [ ] [engine=codex model=gpt-5.3-codex effort=low] Add legacy-row fallback test proving replayed HRV without samples is rejected safely (`samples=0`).
+- [ ] [engine=codex model=gpt-5.3-codex effort=low] Document verification steps and expected logs in `.ralph/plans/hrv-replay-samples-fix/SHIP.md`.

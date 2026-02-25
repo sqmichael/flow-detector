@@ -57,12 +57,21 @@ export function decideTimingPolicy(context: TimingPolicyContext): TimingPolicyDe
     };
   }
 
-  if (context.locationType === "unknown") {
+  if (context.locationType === "unknown" || context.locationType == null) {
     return {
       messageNow: false,
       messageType: "none",
       delayMinutes: context.nextFreeWindowMinutes ?? DEFAULT_DELAY_MINUTES,
       reason: "unknown_location",
+    };
+  }
+
+  if (context.nextFreeWindowMinutes === null && context.calendarPressure === "high") {
+    return {
+      messageNow: false,
+      messageType: "none",
+      delayMinutes: DEFAULT_DELAY_MINUTES,
+      reason: "calendar_missing",
     };
   }
 

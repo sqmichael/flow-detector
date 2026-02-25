@@ -29,24 +29,27 @@ START_PHASE=""
 END_PHASE=""
 LIST_ONLY="${LIST_ONLY:-0}"
 NO_PROMOTE="${NO_PROMOTE:-0}"
+AUTO_PROMOTE_OVERRIDE="${AUTO_PROMOTE_OVERRIDE:-}" # true|false|""
 AUTO_ASSIGN_METADATA="${AUTO_ASSIGN_METADATA:-1}"
 TASK_METADATA_ASSIGNER="${TASK_METADATA_ASSIGNER:-scripts/assign_task_metadata.sh}"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  oralph [--plan phase|loop] [--run step|overnight] [--plan-id <id>] [--start-phase N] [--end-phase N] [--list] [--no-promote]
+  oralph [--plan phase|loop] [--run step|overnight] [--plan-id <id>] [--start-phase N] [--end-phase N] [--list] [--auto-promote|--no-auto-promote]
   oralph [start-phase] [end-phase]   # compatibility shorthand
 
 Modes:
   --plan phase|loop    Plan shape for this execution (default: plan.yaml)
   --run step|overnight Run one task at a time or full range
+  --auto-promote       Force auto-promotion on for this run
+  --no-auto-promote    Force auto-promotion off for this run
 
 Behavior:
   - Executes active plan from .ralph/state.json
   - Plan packs live in .ralph/plans/<plan-id>/
   - Auto-assigns task metadata (`engine/model/effort`) by default when missing
-  - Auto-promotes to next_plan when completion criteria are met (unless --no-promote)
+  - Auto-promotes to next_plan when completion criteria are met
 USAGE
 }
 
@@ -218,7 +221,7 @@ auto_promote_if_ready() {
   local plan_yaml="$3"
   local tasks_file="$plan_dir/TASKS.md"
 
-  if [[ "$NO_PROMOTE" == "1" || "$LIST_ONLY" == "1" ]]; then
+  if [[ "$LIST_ONLY" == "1" ]]; then
     return 0
   fi
 
@@ -239,6 +242,12 @@ auto_promote_if_ready() {
 
   local auto_promote
   auto_promote="$(yaml_get auto_promote "$plan_yaml")"
+  if [[ "$NO_PROMOTE" == "1" ]]; then
+    auto_promote="false"
+  fi
+  if [[ -n "$AUTO_PROMOTE_OVERRIDE" ]]; then
+    auto_promote="$AUTO_PROMOTE_OVERRIDE"
+  fi
   case "$auto_promote" in
     true|1|yes) ;;
     *)
@@ -299,6 +308,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-promote)
       NO_PROMOTE=1
+      AUTO_PROMOTE_OVERRIDE="false"
+      shift
+      ;;
+    --auto-promote)
+      NO_PROMOTE=0
+      AUTO_PROMOTE_OVERRIDE="true"
+      shift
+      ;;
+    --no-auto-promote)
+      NO_PROMOTE=1
+      AUTO_PROMOTE_OVERRIDE="false"
       shift
       ;;
     -h|--help)

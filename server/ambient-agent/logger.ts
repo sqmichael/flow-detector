@@ -33,10 +33,37 @@ export interface DecisionSnapshotLogEntry {
   timestamp: number;
   date: string;
   type: "decision_snapshot";
+  message_id: string | null;
+  decision_reason: string | null;
+  feedback: unknown;
   context: unknown;
   decision: unknown;
   sent: boolean;
+  sent_at: string | null;
   deferred_until: string | null;
+}
+
+type AnyLogEntry = Record<string, unknown>;
+
+function extractDecisionReason(decision: unknown): string | null {
+  if (decision === null || typeof decision !== "object") return null;
+  const reason = (decision as { reason?: unknown }).reason;
+  return typeof reason === "string" ? reason : null;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function isInterventionLogEntry(value: unknown): value is InterventionLogEntry {
+  if (!isObject(value)) return false;
+  if (!("intervention" in value) || !isObject(value.intervention)) return false;
+  return typeof value.intervention.id === "string";
+}
+
+function isDecisionSnapshotLogEntry(value: unknown): value is DecisionSnapshotLogEntry {
+  if (!isObject(value)) return false;
+  return value.type === "decision_snapshot";
 }
 
 // ── Logger Class ────────────────────────────────────────────────────
@@ -85,9 +112,13 @@ export class InterventionLogger {
    * Log one decision-cycle snapshot for offline debugging.
    */
   async logDecisionSnapshot(snapshot: {
+    message_id?: string | null;
+    decision_reason?: string | null;
+    feedback?: unknown;
     context: unknown;
     decision: unknown;
     sent: boolean;
+    sent_at?: string | null;
     deferred_until: string | null;
   }): Promise<void> {
     await this.ensureFile();
@@ -96,9 +127,13 @@ export class InterventionLogger {
       timestamp: Date.now(),
       date: new Date().toISOString().split("T")[0],
       type: "decision_snapshot",
+      message_id: snapshot.message_id ?? null,
+      decision_reason: snapshot.decision_reason ?? extractDecisionReason(snapshot.decision),
+      feedback: snapshot.feedback ?? null,
       context: snapshot.context,
       decision: snapshot.decision,
       sent: snapshot.sent,
+      sent_at: snapshot.sent_at ?? null,
       deferred_until: snapshot.deferred_until,
     };
 
@@ -119,8 +154,8 @@ export class InterventionLogger {
 
       let updated = false;
       const newLines = lines.map((line) => {
-        const entry: InterventionLogEntry = JSON.parse(line);
-        if (entry.intervention.id === interventionId) {
+        const entry = JSON.parse(line) as AnyLogEntry;
+        if (isInterventionLogEntry(entry) && entry.intervention.id === interventionId) {
           entry.intervention.rating = rating;
           updated = true;
         }
@@ -140,6 +175,41 @@ export class InterventionLogger {
   }
 
   /**
+   * Update decision snapshot feedback (`good` | `bad` | null) by message_id.
+   */
+  async updateDecisionSnapshotFeedback(
+    messageId: string,
+    feedback: "good" | "bad" | null
+  ): Promise<boolean> {
+    try {
+      const content = await readFile(this.logPath, "utf-8");
+      const lines = content.trim().split("\n").filter(Boolean);
+
+      let updated = false;
+      const newLines = lines.map((line) => {
+        const entry = JSON.parse(line) as AnyLogEntry;
+        if (
+          isDecisionSnapshotLogEntry(entry) &&
+          entry.message_id === messageId
+        ) {
+          entry.feedback = feedback;
+          updated = true;
+        }
+        return JSON.stringify(entry);
+      });
+
+      if (updated) {
+        await writeFile(this.logPath, newLines.join("\n") + "\n");
+      }
+
+      return updated;
+    } catch (error) {
+      console.error("[Logger] Failed to update decision snapshot feedback:", error);
+      return false;
+    }
+  }
+
+  /**
    * Get all entries for a specific date
    */
   async getEntriesForDate(date: string): Promise<InterventionLogEntry[]> {
@@ -148,7 +218,8 @@ export class InterventionLogger {
       const lines = content.trim().split("\n").filter(Boolean);
 
       return lines
-        .map((line) => JSON.parse(line) as InterventionLogEntry)
+        .map((line) => JSON.parse(line))
+        .filter((entry): entry is InterventionLogEntry => isInterventionLogEntry(entry))
         .filter((entry) => entry.date === date);
     } catch {
       return [];
@@ -161,7 +232,9 @@ export class InterventionLogger {
   async getTodayInterventions(): Promise<Intervention[]> {
     const today = new Date().toISOString().split("T")[0];
     const entries = await this.getEntriesForDate(today);
-    return entries.map((e) => e.intervention);
+    return entries
+      .filter((e): e is InterventionLogEntry => "intervention" in e)
+      .map((e) => e.intervention);
   }
 
   /**
@@ -220,7 +293,9 @@ export class InterventionLogger {
     try {
       const content = await readFile(this.logPath, "utf-8");
       const lines = content.trim().split("\n").filter(Boolean);
-      const entries = lines.map((line) => JSON.parse(line) as InterventionLogEntry);
+      const entries = lines
+        .map((line) => JSON.parse(line))
+        .filter((entry): entry is InterventionLogEntry => isInterventionLogEntry(entry));
 
       // Group by date
       const byDate = new Map<string, InterventionLogEntry[]>();

@@ -29,6 +29,19 @@ const NTFY_PASSWORD = process.env.NTFY_PASSWORD;
 const NTFY_TIMEOUT_MS = 8000;
 const NTFY_MAX_RETRIES = 3;
 const NTFY_RETRY_DELAYS_MS = [500, 1500];
+const NTFY_FEEDBACK_ID_MAX_LENGTH = 64;
+
+function toNtfyFeedbackId(interventionId: string): string {
+  const normalized = interventionId
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
+  const base = normalized || "feedback";
+  const prefix = "fb-";
+  const maxBaseLength = NTFY_FEEDBACK_ID_MAX_LENGTH - prefix.length;
+  return `${prefix}${base.slice(0, Math.max(1, maxBaseLength))}`;
+}
 
 /**
  * Detect the best reachable URL for the rating server.
@@ -89,6 +102,7 @@ export async function sendPushNotification(
   // Add rating buttons if intervention ID provided
   // Note: Button labels must be ASCII-only for HTTP headers
   if (interventionId) {
+    baseHeaders["X-Sequence-ID"] = toNtfyFeedbackId(interventionId);
     baseHeaders["Actions"] = [
       `http, Helpful, ${RATING_SERVER}/rate/${interventionId}/good, method=POST`,
       `http, Okay, ${RATING_SERVER}/rate/${interventionId}/ok, method=POST`,
