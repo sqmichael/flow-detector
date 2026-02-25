@@ -193,6 +193,9 @@ test("deriveWatchQualityStatus returns expected status values", () => {
 test("buildOpenClawDecisionPrompt includes required hard-gate language", () => {
   const ctx = buildOpenClawContext(makeState({ watchQuality: 20 }), makeBaseline(), [], 2, 0, null);
   const prompt = buildOpenClawDecisionPrompt(ctx);
+  assert(prompt.includes("REQUEST_PAYLOAD_JSON:"), "prompt should include request payload header");
+  assert(prompt.includes("\"dataAgeSec\""), "prompt should include dataAgeSec in payload");
+  assert(prompt.includes("\"sensors\""), "prompt should include sensors object");
   assert(prompt.includes('watchQuality.status == "bad"'), "prompt should mention bad-quality hard gate");
   assert(prompt.includes("Return JSON only"), "prompt should require JSON-only output");
 });

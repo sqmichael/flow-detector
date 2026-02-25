@@ -329,7 +329,12 @@ export class AmbientAgent {
 
     this.log("Ambient Agent initialized");
     this.log(`OpenClaw: ${this.useOpenClaw ? "ENABLED" : "DISABLED (using reasoning.ts)"}`);
-    this.log("Config:", JSON.stringify(this.config, null, 2));
+    this.log("Config:", JSON.stringify({
+      relayUrl: this.config.relayUrl,
+      quietHours: this.config.quietHours,
+      maxInterventionsPerDay: this.config.maxInterventionsPerDay,
+      openclawEnabled: this.config.openclaw.enabled,
+    }));
   }
 
   private createInitialState(): AmbientAgentState {
@@ -436,9 +441,16 @@ export class AmbientAgent {
     this.loadPersistedBaseline();
 
     // Load today's interventions from log
-    const todayInterventions = this.ignorePersistedInterventions
+    const todayInterventionsRaw = this.ignorePersistedInterventions
       ? []
       : await this.logger.getTodayInterventions();
+    const todayInterventions = todayInterventionsRaw.filter(
+      (i): i is Intervention =>
+        Boolean(i) &&
+        typeof i === "object" &&
+        typeof i.type === "string" &&
+        typeof i.triggeredAt === "number"
+    );
     this.state.interventionsToday = todayInterventions;
 
     // Check if we've already done interventions today
@@ -1177,7 +1189,7 @@ export class AmbientAgent {
 
     // Calendar-based code-side disqualifiers
     if (calendar?.inMeeting) {
-      this.log(`[DQ] In meeting: "${calendar.currentMeeting}" — suppressing`);
+      this.log("[DQ] In meeting — suppressing");
       await logSnapshot({ reason: "calendar_in_meeting" }, false);
       return;
     }
@@ -1197,7 +1209,7 @@ export class AmbientAgent {
         this.state.flowProtection.flowModeStartedAt = Date.now();
         await enableFocusMode();
       }
-      this.log(`[DQ] Calendar Focus Time: "${focusEvent.summary}" — protecting`);
+      this.log("[DQ] Calendar Focus Time active — protecting");
       await logSnapshot({ reason: "calendar_focus_time", summary: focusEvent.summary }, false);
       return;
     }
@@ -1207,7 +1219,7 @@ export class AmbientAgent {
       e => e.eventType === "outOfOffice" && isCurrentlyInEvent(e, undefined, this.config.quietHours.timezoneOffset)
     );
     if (oooEvent) {
-      this.log(`[DQ] Out of Office: "${oooEvent.summary}" — suppressing`);
+      this.log("[DQ] Out of Office active — suppressing");
       await logSnapshot({ reason: "calendar_out_of_office", summary: oooEvent.summary }, false);
       return;
     }
@@ -1219,13 +1231,18 @@ export class AmbientAgent {
     }
 
     const message = buildOpenClawDecisionPrompt(context);
+    this.log(
+      `[OpenClaw] Request payload: watchConnected=${context.sensors.watchConnected}, dataAgeSec=${context.sensors.dataAgeSec ?? "null"}, hr=${context.sensors.hr ?? "null"}, hrv=${context.sensors.hrv ?? "null"}, scl=${context.sensors.scl ?? "null"}`
+    );
 
     // Also update the main agent's biometric context file
     this.updateMainAgentContext(context);
 
     const response = await queryOpenClaw(message, this.config.openclaw);
 
-    this.log(`[OpenClaw] Response: ${response.reasoning}`);
+    this.log(
+      `[OpenClaw] Decision: shouldIntervene=${response.shouldIntervene}, actions=${response.actions.length}`
+    );
     const hasPushAction = response.actions.some((action) => action.type === "send_push");
 
     if (!response.shouldIntervene || response.actions.length === 0) {
@@ -1309,6 +1326,7 @@ export class AmbientAgent {
             this.state.interventionsToday.push(intervention);
             await this.logger.logIntervention(intervention);
             await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+            if (messageId === null) messageId = intervention.id;
             sent = true;
           }
           break;
@@ -1414,6 +1432,7 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await triggerPhoneCall(this.config.phoneNumber, "stress_check_in", action.message);
+          if (messageId === null) messageId = intervention.id;
           sent = true;
           break;
         }
@@ -1429,6 +1448,7 @@ export class AmbientAgent {
           this.state.interventionsToday.push(intervention);
           await this.logger.logIntervention(intervention);
           await executeIntervention(intervention, { relayWs: this.ws ?? undefined });
+          if (messageId === null) messageId = intervention.id;
           sent = true;
           break;
         }

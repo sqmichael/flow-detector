@@ -35,7 +35,10 @@ export interface DecisionSnapshotLogEntry {
   type: "decision_snapshot";
   message_id: string | null;
   decision_reason: string | null;
+  /** Structured push-outcome set at log time (action/outcome/reason). Never overwritten. */
   feedback: unknown;
+  /** User rating set after delivery: "good" | "bad" | "ok" | null (null = not yet rated). */
+  user_feedback: "good" | "bad" | "ok" | null;
   context: unknown;
   decision: unknown;
   sent: boolean;
@@ -44,6 +47,55 @@ export interface DecisionSnapshotLogEntry {
 }
 
 type AnyLogEntry = Record<string, unknown>;
+
+const LOG_RETENTION_DAYS = Number.parseInt(process.env.AMBIENT_LOG_RETENTION_DAYS ?? "30", 10);
+const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const REDACTED_TEXT = "[REDACTED]";
+const REDACTED_COORD = "[REDACTED_COORDINATE]";
+const LOCATION_KEY_PARTS = ["location", "latitude", "longitude", "lat", "lon", "lng", "accuracy"];
+const TITLE_LIKE_KEYS = new Set(["summary", "currentMeeting", "nextEventName", "eventName", "title"]);
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function looksLikePhone(value: string): boolean {
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 10;
+}
+
+function sanitizeString(value: string, key: string | null): string {
+  if (key && TITLE_LIKE_KEYS.has(key)) return REDACTED_TEXT;
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value.trim())) return REDACTED_TEXT;
+  if (looksLikePhone(value)) return REDACTED_TEXT;
+  return value;
+}
+
+function sanitizeForLog(value: unknown, key: string | null = null): unknown {
+  if (typeof value === "string") {
+    return sanitizeString(value, key);
+  }
+
+  if (isFiniteNumber(value) && key && LOCATION_KEY_PARTS.includes(key.toLowerCase())) {
+    return REDACTED_COORD;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForLog(item, key));
+  }
+
+  if (!isObject(value)) return value;
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [childKey, childValue] of Object.entries(value)) {
+    if (childKey === "raw_json") {
+      sanitized[childKey] = null;
+      continue;
+    }
+    sanitized[childKey] = sanitizeForLog(childValue, childKey);
+  }
+  return sanitized;
+}
 
 function extractDecisionReason(decision: unknown): string | null {
   if (decision === null || typeof decision !== "object") return null;
@@ -70,6 +122,7 @@ function isDecisionSnapshotLogEntry(value: unknown): value is DecisionSnapshotLo
 
 export class InterventionLogger {
   private logPath: string;
+  private lastPruneAt = 0;
 
   constructor(logPath: string) {
     this.logPath = logPath;
@@ -84,6 +137,37 @@ export class InterventionLogger {
     } catch {
       await writeFile(this.logPath, "");
     }
+
+    await this.pruneIfNeeded();
+  }
+
+  private async pruneIfNeeded(): Promise<void> {
+    if (!Number.isFinite(LOG_RETENTION_DAYS) || LOG_RETENTION_DAYS <= 0) return;
+
+    const now = Date.now();
+    if (now - this.lastPruneAt < PRUNE_INTERVAL_MS) return;
+
+    this.lastPruneAt = now;
+    const cutoff = now - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+    try {
+      const content = await readFile(this.logPath, "utf-8");
+      const lines = content.trim().split("\n").filter(Boolean);
+      const retained = lines.filter((line) => {
+        try {
+          const parsed = JSON.parse(line) as { timestamp?: unknown };
+          return !isFiniteNumber(parsed.timestamp) || parsed.timestamp >= cutoff;
+        } catch {
+          return false;
+        }
+      });
+
+      if (retained.length !== lines.length) {
+        await writeFile(this.logPath, retained.length > 0 ? `${retained.join("\n")}\n` : "");
+      }
+    } catch {
+      // Non-critical: retention should never block logging.
+    }
   }
 
   /**
@@ -94,11 +178,12 @@ export class InterventionLogger {
     condition: InterventionLogEntry["condition"] = "sensor_triggered"
   ): Promise<void> {
     await this.ensureFile();
+    const safeIntervention = sanitizeForLog(intervention) as Intervention;
 
     const entry: InterventionLogEntry = {
       timestamp: Date.now(),
       date: new Date().toISOString().split("T")[0],
-      intervention,
+      intervention: safeIntervention,
       condition,
     };
 
@@ -129,9 +214,10 @@ export class InterventionLogger {
       type: "decision_snapshot",
       message_id: snapshot.message_id ?? null,
       decision_reason: snapshot.decision_reason ?? extractDecisionReason(snapshot.decision),
-      feedback: snapshot.feedback ?? null,
-      context: snapshot.context,
-      decision: snapshot.decision,
+      feedback: sanitizeForLog(snapshot.feedback ?? null),
+      user_feedback: null,
+      context: sanitizeForLog(snapshot.context),
+      decision: sanitizeForLog(snapshot.decision),
       sent: snapshot.sent,
       sent_at: snapshot.sent_at ?? null,
       deferred_until: snapshot.deferred_until,
@@ -175,11 +261,14 @@ export class InterventionLogger {
   }
 
   /**
-   * Update decision snapshot feedback (`good` | `bad` | null) by message_id.
+   * Update decision snapshot user_feedback by message_id.
+   *
+   * Writes to `user_feedback` (not `feedback`) to preserve the original
+   * push-outcome metadata logged at decision time.
    */
   async updateDecisionSnapshotFeedback(
     messageId: string,
-    feedback: "good" | "bad" | null
+    feedback: "good" | "bad" | "ok" | null
   ): Promise<boolean> {
     try {
       const content = await readFile(this.logPath, "utf-8");
@@ -192,7 +281,7 @@ export class InterventionLogger {
           isDecisionSnapshotLogEntry(entry) &&
           entry.message_id === messageId
         ) {
-          entry.feedback = feedback;
+          entry.user_feedback = feedback;
           updated = true;
         }
         return JSON.stringify(entry);
@@ -234,7 +323,14 @@ export class InterventionLogger {
     const entries = await this.getEntriesForDate(today);
     return entries
       .filter((e): e is InterventionLogEntry => "intervention" in e)
-      .map((e) => e.intervention);
+      .map((e) => e.intervention)
+      .filter(
+        (i): i is Intervention =>
+          Boolean(i) &&
+          typeof i === "object" &&
+          typeof i.type === "string" &&
+          typeof i.triggeredAt === "number"
+      );
   }
 
   /**

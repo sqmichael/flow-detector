@@ -98,14 +98,32 @@ function validateResponse(raw: unknown): OpenClawResponse | null {
 
   const obj = raw as Record<string, unknown>;
 
-  if (typeof obj.shouldIntervene !== "boolean") return null;
-  if (typeof obj.reasoning !== "string") return null;
+  const shouldIntervene = obj.shouldIntervene;
+  const reasoning = obj.reasoning;
+  if (typeof shouldIntervene !== "boolean") return null;
+  if (typeof reasoning !== "string") return null;
 
-  // Actions array must exist
-  if (!Array.isArray(obj.actions)) return null;
+  // Accept mildly malformed keys from model output (e.g., "action s", "Action-S")
+  // by normalizing punctuation/spacing before matching.
+  const findActionsArray = (): unknown[] | null => {
+    if (Array.isArray(obj.actions)) return obj.actions;
+    for (const [key, value] of Object.entries(obj)) {
+      const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
+      if (normalized === "actions" && Array.isArray(value)) {
+        return value;
+      }
+    }
+    // Conservative fallback: if model says "do not intervene" and omitted actions,
+    // normalize to an empty action list.
+    if (shouldIntervene === false) return [];
+    return null;
+  };
+
+  const actions = findActionsArray();
+  if (!actions) return null;
 
   // Validate each action
-  for (const action of obj.actions) {
+  for (const action of actions) {
     if (typeof action !== "object" || action === null) return null;
     const a = action as Record<string, unknown>;
     if (typeof a.type !== "string") return null;
@@ -113,9 +131,9 @@ function validateResponse(raw: unknown): OpenClawResponse | null {
   }
 
   return {
-    shouldIntervene: obj.shouldIntervene as boolean,
-    actions: obj.actions as OpenClawResponse["actions"],
-    reasoning: obj.reasoning as string,
+    shouldIntervene,
+    actions: actions as OpenClawResponse["actions"],
+    reasoning,
   };
 }
 

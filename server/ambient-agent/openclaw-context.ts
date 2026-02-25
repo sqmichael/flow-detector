@@ -133,10 +133,10 @@ export async function fetchCalendarContext(timezoneOffset: number): Promise<Cale
       return null;
     }
 
-    const events = parseCalendarEvents(textContent.text, now);
+    const events = parseCalendarEvents(textContent.text, now, timezoneOffset);
     calendarCache = { data: events, fetchedAt: Date.now() };
 
-    const meetingStatus = events.inMeeting ? `IN MEETING: ${events.currentMeeting}` : "clear";
+    const meetingStatus = events.inMeeting ? "IN MEETING" : "clear";
     console.log(`[Calendar] ${events.upcoming.length} events, ${meetingStatus}`);
 
     return events;
@@ -181,7 +181,11 @@ export function isCurrentlyInEvent(
  * Parse raw calendar response text into structured events.
  * Handles both JSON array and text-based formats from the MCP.
  */
-function parseCalendarEvents(text: string, now: Date): CalendarContext {
+function parseCalendarEvents(
+  text: string,
+  now: Date,
+  timezoneOffset: number
+): CalendarContext {
   const upcoming: CalendarEvent[] = [];
   let inMeeting = false;
   let currentMeeting: string | null = null;
@@ -208,9 +212,15 @@ function parseCalendarEvents(text: string, now: Date): CalendarContext {
       const event: CalendarEvent = { summary, start: startStr, end: endStr, status, eventType, uid, isAllDay };
       upcoming.push(event);
 
-      // Check if event is happening now
-      const startTime = new Date(startStr).getTime();
-      const endTime = new Date(endStr).getTime();
+      // Check if event is happening now (all-day aware, aligned to local timezone)
+      const isAllDayDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+      const offsetMs = timezoneOffset * 60 * 60 * 1000;
+      const startTime = isAllDayDate(startStr)
+        ? new Date(startStr).getTime() - offsetMs
+        : new Date(startStr).getTime();
+      const endTime = isAllDayDate(endStr)
+        ? new Date(endStr).getTime() - offsetMs
+        : new Date(endStr).getTime();
       const nowMs = now.getTime();
 
       if (startTime <= nowMs && endTime > nowMs) {
@@ -449,7 +459,21 @@ export function buildOpenClawContext(
 }
 
 export function buildOpenClawDecisionPrompt(context: OpenClawContext): string {
-  return `You are deciding interventions from biometric context.
+  const requestPayload = {
+    sensors: context.sensors,
+    baseline: context.baseline,
+    detections: context.detections,
+    calendar: context.calendar,
+    dynamicContext: context.dynamicContext,
+    agentState: context.agentState,
+  };
+
+  return `REQUEST_PAYLOAD_JSON:
+${JSON.stringify(requestPayload)}
+
+You are deciding interventions from biometric context.
+The REQUEST_PAYLOAD_JSON above is the source of truth for this request.
+Do not claim missing sensor payload if REQUEST_PAYLOAD_JSON includes sensors/dataAgeSec.
 
 Hard gate on watch quality:
 - If watchQuality.status == "bad", treat biometric data as unreliable.
@@ -473,7 +497,5 @@ Return JSON only:
   "actions": [{"type":"enable_focus_mode|disable_focus_mode|send_haptic|send_push|trigger_call|send_reflection|no_action","message":"optional","priority":"low|default|high","pattern":"gentle|urgent"}],
   "reasoning": "one sentence"
 }
-
-Context:
-${JSON.stringify(context)}`;
+`;
 }
